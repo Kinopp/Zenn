@@ -1,5 +1,5 @@
 ---
-title: "階層構造の取り扱い"
+title: "階層構造の取り扱い（全4問）"
 free: false
 ---
 
@@ -211,7 +211,7 @@ Oracle 23ai（および近年のバージョン）では、標準SQLである **
 * **深さ優先探索順でソートする**
 
 
-### 期待する結果
+## 期待する結果
 | 	MANAGER_ID	| 	EMPLOYEE_ID	| 	EMPLOYEE_NAME	| 
 | 	----	| 	----	| 	----	| 
 | 	 - 	| 	100	| 	1. Steven King	| 
@@ -323,62 +323,120 @@ Oracle 23ai（および近年のバージョン）では、標準SQLである **
 | 	201	| 	202	| 	&nbsp;&nbsp;&nbsp;&nbsp;3. Pat Fay	|
 
 
-### 解答例
-- 再帰的with句を使用
-```sql
-with recursive_pr (
-  employee_id,
-  manager_id,
-  first_name,
-  last_name,
-  lvl
-) as (
-  select
-    e1.employee_id,
-    e1.manager_id,
-    e1.first_name,
-    e1.last_name,
-    1 as lvl
-  from employees e1
-  where
-    e1.manager_id is null
-
-  union all
-
-  select
-    e2.employee_id,
-    e2.manager_id,
-    e2.first_name,
-    e2.last_name,
-    rpr.lvl + 1
-  from recursive_pr rpr
-    inner join employees e2 
-      on e2.manager_id = rpr.employee_id
-) 
-    search breadth first by manager_id set rpr_order
-select
-  manager_id,
-  employee_id,
-  lpad(' ', 2 *(lvl -1)) || lvl || '. ' || first_name || ' ' || last_name as employee_name
-from recursive_pr
-order by rpr_order
+## 解答例
+```sql:例1：再帰的with句を使用
+WITH recursive_pr (
+    employee_id,
+    manager_id,
+    first_name,
+    last_name,
+    lvl
+) AS (
+    SELECT
+        e1.employee_id,
+        e1.manager_id,
+        e1.first_name,
+        e1.last_name,
+        1 AS lvl
+    FROM
+        hr.employees e1
+    WHERE
+        e1.manager_id IS NULL
+    UNION ALL
+    SELECT
+        e2.employee_id,
+        e2.manager_id,
+        e2.first_name,
+        e2.last_name,
+        rpr.lvl + 1
+    FROM
+             recursive_pr rpr
+        INNER JOIN hr.employees e2 ON e2.manager_id = rpr.employee_id
+)
+    SEARCH DEPTH FIRST BY manager_id SET rpr_order
+SELECT
+    manager_id,
+    employee_id,
+    lpad(' ', 2 *(lvl - 1))
+    || lvl
+    || '. '
+    || first_name
+    || ' '
+    || last_name AS employee_name
+FROM
+    recursive_pr
+ORDER BY
+    rpr_order
 ```
 
-- 階層問合せ演算子を使用
-```sql
-select
-  manager_id,
-  employee_id,
-  lpad(' ', 2 *(level -1)) || level || '. ' || first_name || ' ' || last_name as employee_name
-from employees 
-    start with manager_id is null 
-    connect by prior employee_id = manager_id
+```sql:例2：階層問合せ演算子を使用
+SELECT
+    manager_id,
+    employee_id,
+    LPAD(' ', 2 *(LEVEL - 1))
+    || LEVEL
+    || '. '
+    || first_name
+    || ' '
+    || last_name AS employee_name
+FROM
+    hr.employees
+START WITH
+    manager_id IS NULL
+CONNECT BY
+    PRIOR employee_id = manager_id
 ```
 
-### 解説
+## 解説
+SQLにおける「階層問合せ（Hierarchical Query）」の集大成です。会社組織や部品構成表（BOM）のように、親子関係があるデータを扱う際の必須テクニックですね。
+今回のポイントは、単に繋げるだけでなく「見た目を美しく整える（インデントとレベル番号）」ところにあります。
+
+### 1. 核心：ツリー構造を支える「インデントの魔法」
+期待する結果のような「美しいツリー」を作る最大のポイントは、解答例のどちらにも登場する **`LPAD` 関数** です。
+
+#### ① `LPAD` と `LEVEL` のコンビネーション
+
+```sql
+LPAD(' ', 2 * (lvl - 1)) || lvl || '. ' || first_name
+```
+
+* **`lvl` (または `LEVEL`)**: 階層の深さを表す数値です（社長=1, 副社長=2...）。
+* **`LPAD(' ', 2 * (lvl - 1))`**: 「階層が1つ深くなるごとに、半角スペースを2つずつ追加する」という命令です。
+
+これにより、SQLの実行結果がテキストベースであっても、一目で組織のレポートライン（誰が誰の下か）が分かるようになります。
 
 
-### 参考リンク
+### 2. 解法の深掘り：2つのアプローチ
+実務でどちらを使うべきか、その「キャラの違い」を整理しておきましょう。
+
+#### 例1：再帰的WITH句（標準SQLスタイル）
+モダンな開発現場で好まれる、非常に論理的な書き方です。
+
+1. **アンカー部（上側）**: まず「社長（マネージャーがいない人）」を特定します。
+2. **再帰部（下側）**: 特定した人に紐づく「部下」を次々に繋げていきます。
+3. **SEARCH DEPTH FIRST**: ここが重要です！「一人の上司の部下をすべて掘り下げてから、次の上司へ行く」という**深さ優先探索**を指定することで、組織図として自然な並び順を実現しています。
+
+#### 例2：CONNECT BY（Oracleの伝統芸）
+Oracleを使うなら避けては通れない、非常に強力かつ簡潔な独自構文です。
+
+* **`START WITH`**: 探索を開始する「根（ルート）」を指定。
+* **`CONNECT BY PRIOR`**: 「今の行のID（親）と、次の行のManagerID（子）を繋ぐ」という親子関係を一行で定義。
+* **デフォルトの挙動**: `CONNECT BY` は標準で深さ優先探索を行うため、並び替えの指定を最小限に抑えられます。
+
+### 3. 実務での使い分け：どっちが最強？
+
+| 特徴 | 再帰的WITH句 (例1) | CONNECT BY (例2) |
+| --- | --- | --- |
+| **可読性** | 手続きを追えるので理解しやすい。 | 非常に短く、慣れると爆速で書ける。 |
+| **汎用性** | **◎** PostgreSQLやSQL Serverでも動く。 | **△** Oracle専用（一部他DBで互換あり）。 |
+| **柔軟性** | 複雑な計算を再帰中に組み込みやすい。 | 基本的なツリー構造には最適。 |
+
+> **プロの視点：DFS vs BFS**
+> 今回の「上司のすぐ下にその部下を並べる」のが **深さ優先探索 (DFS)**。
+> 一方で、「まず全社員のレベル1を出し、次に全員のレベル2を出す……」という並びは **幅優先探索 (BFS)** と呼ばれます。用途によって使い分けられるようになると、Lv4卒業ですね！
+
+
+## 参考リンク
 https://www.shift-the-oracle.com/sql/with.html#with-recursive
 
 
@@ -386,73 +444,289 @@ https://www.shift-the-oracle.com/sql/with.html#with-recursive
 <br><br>
 
 
-# 問題X-X（XXXXX）
-- 1. 組織ツリーの完全走査と部門全体の給与ロールアップ（再帰CTE）
-マネージャーと部下の関係（manager_id）をたどり、**「自分自身だけでなく、配下のすべての階層の従業員を含めた組織全体の人件費」**を計算するクエリです。階層の深さがどれだけあっても動的に計算します。
+# 【完全版】問題14-3（組織ツリーの完全走査） *Lv4*
+### HRスキーマ`EMPLOYEES`テーブルを参照し、自分自身を含めた階下のすべての従業員について、下記の値を取得して下さい。配下に自分自身以外の従業員がいる人を対象としてください。（人件費総額の降順）
 
-### 期待する結果
-件数多い
+* **人件費総額`TOTAL_ORG_SALARY`（`SALARY`の合計）**
+* **配下の人数`TOTAL_SUBORDINATES`**
+* **部署の総報酬に占める自身の報酬の割合`PCT_OF_TOTAL_ORG_SALARY`（自身の報酬／人件費総額✖️100）**
 
-### 解答例
+
+## 期待する結果
+| MANAGER_NODE | INDENTED_EMP_NAME | OWN_SALARY | TOTAL_ORG_SALARY | TOTAL_SUBORDINATES | PCT_OF_TOTAL_ORG_SALARY | 
+| ------------ | ----------------- | ---------- | ---------------- | ------------------ | ----------------------- | 
+| 100          | Steven King       | 24000      | 691416           | 106                | 3.47                    | 
+| 101          | Neena Yang        | 17000      | 109816           | 11                 | 15.48                   | 
+| 145          | John Singh        | 14000      | 65000            | 6                  | 21.54                   | 
+| 146          | Karen Partners    | 13500      | 64500            | 6                  | 20.93                   | 
+| 148          | Gerald Cambrault  | 11000      | 62900            | 6                  | 17.49                   | 
+| 149          | Eleni Zlotkey     | 10500      | 60500            | 6                  | 17.36                   | 
+| 147          | Alberto Errazuriz | 12000      | 58600            | 6                  | 20.48                   | 
+| 108          | Nancy Gruenberg   | 12008      | 51608            | 5                  | 23.27                   | 
+| 102          | Lex Garcia        | 17000      | 45800            | 5                  | 37.12                   | 
+| 121          | Adam Fripp        | 8200       | 33600            | 8                  | 24.4                    | 
+| 123          | Shanta Vollman    | 6500       | 32400            | 8                  | 20.06                   | 
+| 122          | Payam Kaufling    | 7900       | 31500            | 8                  | 25.08                   | 
+| 120          | Matthew Weiss     | 8000       | 30100            | 8                  | 26.58                   | 
+| 124          | Kevin Mourgos     | 5800       | 28800            | 8                  | 20.14                   | 
+| 103          | Alexander James   | 9000       | 28800            | 4                  | 31.25                   | 
+| 114          | Den Li            | 11000      | 24900            | 5                  | 44.18                   | 
+| 205          | Shelley Higgins   | 12008      | 20308            | 1                  | 59.13                   | 
+| 201          | Michael Martinez  | 13000      | 19000            | 1                  | 68.42                   | 
+
+## 解答例
 ```sql
-WITH OrgTree (
-        employee_id,
-        manager_id,
-        emp_name,
-        salary,
-        org_level,
-        hierarchy_path
-)AS (
+WITH orgtree (
+    employee_id,
+    manager_id,
+    emp_name,
+    salary,
+    org_level,
+    hierarchy_path
+) AS (
     -- 1. ベースクエリ：トップマネジメント（社長など、マネージャーがいない従業員）
     SELECT
         employee_id,
         manager_id,
-        first_name || ' ' || last_name AS emp_name,
+        first_name
+        || ' '
+        || last_name                                 AS emp_name,
         salary,
-        1 AS org_level,
+        1                                            AS org_level,
         CAST(TO_CHAR(employee_id) AS VARCHAR2(1000)) AS hierarchy_path
-    FROM hr.employees
-    WHERE manager_id IS NULL
-    
+    FROM
+        hr.employees
+    WHERE
+        manager_id IS NULL
+
     UNION ALL
     
     -- 2. 再帰クエリ：直属の部下をツリーに結合していく
     SELECT
         e.employee_id,
         e.manager_id,
-        e.first_name || ' ' || e.last_name,
+        e.first_name
+        || ' '
+        || e.last_name,
         e.salary,
         t.org_level + 1,
-        t.hierarchy_path || '->' || TO_CHAR(e.employee_id)
-    FROM hr.employees e
-    JOIN OrgTree t ON e.manager_id = t.employee_id
-),
-OrgRollup AS (
+        t.hierarchy_path
+        || '->'
+        || TO_CHAR(e.employee_id)
+    FROM
+             hr.employees e
+        JOIN orgtree t ON e.manager_id = t.employee_id
+), orgrollup AS (
     -- 3. 階層パス（hierarchy_path）を利用して、自身の配下（間接的な部下も含む）を特定し集計
     SELECT
-        t1.employee_id AS manager_node,
+        t1.employee_id            AS manager_node,
         t1.emp_name,
         t1.org_level,
-        t1.salary AS own_salary,
-        SUM(t2.salary) AS total_org_salary,
+        t1.salary                 AS own_salary,
+        SUM(t2.salary)            AS total_org_salary,
         COUNT(t2.employee_id) - 1 AS total_subordinates
-    FROM OrgTree t1
-    JOIN OrgTree t2 ON t2.hierarchy_path LIKE t1.hierarchy_path || '%'
-    GROUP BY t1.employee_id, t1.emp_name, t1.org_level, t1.salary
+    FROM
+             orgtree t1
+        JOIN orgtree t2 ON t2.hierarchy_path LIKE t1.hierarchy_path || '%'
+    GROUP BY
+        t1.employee_id,
+        t1.emp_name,
+        t1.org_level,
+        t1.salary
 )
 -- 4. 最終結果の整形（組織全体の給与コストが高い順）
 SELECT
     manager_node,
-    LPAD(' ', (org_level - 1) * 4) || emp_name AS indented_emp_name,
+    LPAD(' ',(org_level - 1) * 4)
+    || emp_name                                   AS indented_emp_name,
     own_salary,
     total_org_salary,
     total_subordinates,
     ROUND(own_salary / total_org_salary * 100, 2) AS pct_of_total_org_salary
-FROM OrgRollup
-ORDER BY total_org_salary DESC;
+FROM
+    orgrollup
+WHERE
+    total_subordinates > 0
+ORDER BY
+    total_org_salary DESC
 ```
 
-### 解説
+## 解説
+これまでの階層問い合わせは「上司と部下の関係を繋ぐ」だけでしたが、今回はその先の **「配下全員の集計（ロールアップ）」** という、実務のBIレポートや人件費シミュレーションで最も重宝される、かつ最も難易度の高いテクニックです。
+
+### 1. 核心：なぜこの問題が「Lv4」なのか？
+通常の `GROUP BY` は、同じ階層にあるデータをまとめるのは得意ですが、組織図のような「枝分かれした先のデータ」を全て足し合わせることはできません。
+
+この問題を解くには、単にツリーを作るだけでなく、**「誰が誰の傘下にいるか」という家系図的な全履歴**を管理し、それを元に再集計するという2段構えのロジックが必要になります。
+
+### 2. 解法のロジック解剖
+解答例のクエリは、4つのフェーズで「組織の全貌」を解き明かしています。
+
+#### ① `orgtree`：再帰によるパス（道筋）の構築
+ここで最も重要なのは `hierarchy_path` です。
+* **社長（100）**: パスは `"100"`
+* **副社長（101）**: パスは `"100->101"`
+* **マネージャー（108）**: パスは `"100->101->108"`
+
+このように、**「自分がどの家系に属しているか」を文字列として保持**します。
+
+
+#### ② `orgrollup`：全配下の「傘下」検索
+ここが魔法のポイントです。
+```sql
+JOIN orgtree t2 ON t2.hierarchy_path LIKE t1.hierarchy_path || '%'
+```
+自分（`t1`）のパスが、相手（`t2`）のパスの「前方一致」であるかを確認しています。
+例えば、`t1` が「101」の場合、パスが 「101...」 で始まる人（101自身と、その部下全員）を全てヒットさせ、その給与を合計しています。
+
+#### ③ 数値計算と割合の算出
+自身の報酬が組織全体でどれくらいのインパクトを持っているかを計算します。
+
+$$\text{PCT\_OF\_TOTAL\_ORG\_SALARY} = \frac{\text{OWN\_SALARY}}{\text{TOTAL\_ORG\_SALARY}} \times 100$$
+
+
+### 3. 実務での活用シーン：人件費の「深掘り」
+このクエリが書けると、経営層に対して非常に付加価値の高いデータを提示できます。
+
+* **部門別コストの可視化**: 特定の役員が率いる「一派」全員で、いくらのコストがかかっているか。
+* **スパン・オブ・コントロール分析**: `TOTAL_SUBORDINATES` を見ることで、一人のマネージャーが何人の部下（間接含む）を抱え、管理コストが適正かを判断できます。
+
+### 4. 期待する結果のポイント
+
+結果のトップに君臨する **Steven King** さんを見てください。
+* **TOTAL_ORG_SALARY**: 691,416（全従業員の給与総額）
+* **TOTAL_SUBORDINATES**: 106（自分以外の全社員数）
+* **PCT**: 3.47%（自身の給与は、組織全体の約3.5%を占める）
+
+これが、階下の **Neena Yang** さんになると、彼女の「傘下」だけの集計に切り替わります。このように、**「視点を変えるだけで、その下の宇宙が全て再集計される」** のが、再帰SQLの真骨頂です。
+
+> **パフォーマンスの注意点**
+> 今回使用した `LIKE` による結合は直感的で分かりやすいですが、データが数万件を超えると非常に重くなります。その場合は、階層モデルを「入れ子集合モデル」などで管理する手法もありますが、数千件程度の組織図なら、この再帰パス方式が最もスマートです。
+
 
 ----
+<br><br>
 
+
+# 【完全版】問題14-4（総合演習） *Lv4*
+### SHスキーマのデータを用い、以下の4つのステップを1つのクエリ（または一連のCTE）で実行し、結果を取得してください。
+
+1.  **階層の特定**:
+    `PRODUCTS`テーブルの`PROD_CATEGORY`をもとに、全カテゴリの2020年と2021年の売上合計を算出してください。
+2.  **成長率とシェアの算出**:
+    * 各カテゴリについて、2020年比の**成長率（GROWTH_RATE）** を計算してください。
+    * 同時に、そのカテゴリが属する「全体売上」に対して、そのカテゴリが何％寄与しているか（**SHARE_IN_TOTAL**）を`RATIO_TO_REPORT`で算出してください。
+3.  **ランキングと絞り込み**:
+    * 成長率が高い順にランク（**GROWTH_RANK**）を付けてください。
+    * **「2020年よりも売上が伸びており（成長率 > 0）、かつ全体シェアが0.1%以上」** のカテゴリのみを対象とします。
+4.  **フォーマット**:
+    * 最終結果は、カテゴリ名、2020年売上、2021年売上、成長率、全体シェア、成長ランクを表示してください。
+
+
+## 期待する結果
+| CATEGORY          | S2020        | S2021        | GROWTH_RATE | SHARE_IN_TOTAL | GROWTH_RANK | 
+| ----------------- | ------------ | ------------ | ----------- | -------------- | ----------- | 
+| Tennis            | 2,916,369.92 | 5,200,605.88 | 78.32%      | 21.88%         | 1           | 
+| Golf              | 3,781,243.27 | 4,336,456.40 | 14.68%      | 18.25%         | 2           | 
+| Soccer / Football | 3,884,664.22 | 4,329,248.89 | 11.44%      | 18.22%         | 3           | 
+
+## 解答例
+```sql
+WITH category_sales_raw AS (
+    -- 1. 基礎データの抽出：年・カテゴリ別の売上集計
+    SELECT
+        p.prod_category                  AS category,
+        TO_CHAR(s.time_id, 'YYYY')      AS sales_year,
+        SUM(s.amount_sold)              AS total_amount
+    FROM
+        sh.sales s
+        INNER JOIN sh.products p ON s.prod_id = p.prod_id
+    WHERE
+        TO_CHAR(s.time_id, 'YYYY') IN ('2020', '2021')
+    GROUP BY
+        p.prod_category,
+        TO_CHAR(s.time_id, 'YYYY')
+),
+category_pivoted AS (
+    -- 2. PIVOTによる形状変換：年比較をしやすくするために横持ちにする
+    SELECT *
+    FROM category_sales_raw
+    PIVOT (
+        SUM(total_amount)
+        FOR sales_year IN ('2020' AS sales_2020, '2021' AS sales_2021)
+    )
+),
+analyzed_data AS (
+    -- 3. 分析関数の適用：成長率、全体シェア、ランクの算出
+    SELECT
+        category,
+        sales_2020,
+        sales_2021,
+        -- 成長率：((今期 - 前期) / 前期) * 100
+        ROUND(
+            (sales_2021 - sales_2020) / NULLIF(sales_2020, 0) * 100, 
+            2
+        ) AS growth_rate,
+        -- 2021年度全体売上に対する各カテゴリのシェア
+        ROUND(
+            RATIO_TO_REPORT(sales_2021) OVER() * 100, 
+            2
+        ) AS share_in_total
+    FROM
+        category_pivoted
+)
+-- 4. 最終的な絞り込みとランキング
+SELECT
+    category,
+    TO_CHAR(sales_2020, '9,999,999.99') AS s2020,
+    TO_CHAR(sales_2021, '9,999,999.99') AS s2021,
+    growth_rate || '%'                 AS growth_rate,
+    share_in_total || '%'              AS share_in_total,
+    RANK() OVER(ORDER BY growth_rate DESC) AS growth_rank
+FROM
+    analyzed_data
+WHERE
+    growth_rate > 0           -- 成長していること
+    AND share_in_total >= 0.1 -- 全体シェアが0.1%以上
+ORDER BY
+    growth_rank;
+```
+
+## 解説
+このクエリは、単なるデータの抽出を超えて、**「生の販売記録から、経営の意思決定に直結するインサイトを生成する」** という、データアナリストの真髄が詰まったクエリーです。
+
+### 1. データの「種」をまく (`category_sales_raw`)
+まずは、膨大な `SALES` テーブルから、必要な情報だけを削り出します。
+
+* **役割**: 分析対象の「年（2020/2021）」と「カテゴリ」を特定し、最小単位の集計を行います。
+* **ポイント**: `TO_CHAR(time_id, 'YYYY')` で日付から年を切り出し、グループ化の軸にしています。
+
+### 2. 比較のために「形」を変える (`category_pivoted`)
+ここが一つ目の山場、**PIVOT（横持ち変換）** です。
+
+* **なぜ必要か？**: 元のデータは「2020年の行」と「2021年の行」が縦に並んでいます。しかし、成長率を計算するには「同じ行の隣同士」に数値がある必要があります。
+* **魔法の瞬間**: 縦に並んでいた年度を列名に変換し、1カテゴリ1行の形にまとめました。
+
+### 3. 「価値」を算出する (`analyzed_data`)
+形が整ったら、分析関数の出番です。ここでは「物差し」を2つ作っています。
+
+#### ① 成長率 (GROWTH_RATE)
+比較可能な形になったおかげで、`(今期 - 前期) / 前期` というシンプルな計算が可能になりました。
+> **💡 プロのこだわり**: `NULLIF(sales_2020, 0)` を使うことで、もし去年が売上ゼロだった場合に発生する「0除算エラー」をエレガントに回避しています。
+
+#### ② 全体シェア (SHARE_IN_TOTAL)
+ここで登場するのが、第12章の奥義 **`RATIO_TO_REPORT`** です。
+* **役割**: 「2021年の全売上」という分母を瞬時に作り、各カテゴリの貢献度（％）を算出します。
+
+
+### 4. 宝石だけを「選別」して磨く (最終SELECT)
+最後に、経営陣に提出するための「最終フォーマット」に整えます。
+
+* **絞り込み**: 「成長率 > 0（伸びている）」かつ「シェア >= 0.1%（無視できない規模）」というビジネスフィルタを適用します。
+* **ランキング**: 成長率が高い順に `RANK()` を振ります。このランクは、**WHERE句で絞り込まれた後の精鋭たち**の中での順位になります。
+* **装飾**: `TO_CHAR` でカンマ区切りにし、`|| '%'` で単位を付ける。この「見た目の配慮」が、レポートの信頼性を高めます。
+
+### 期待する結果から見えるストーリー
+結果を見ると、**Tennis** カテゴリが約78%という驚異的な成長率で1位に輝いています。
+
+* **アナリストの視点**: 「成長率1位（Tennis）」だけでなく、2位の **Golf** や3位の **Soccer** もシェアが18%を超えており、これらは**「売上の柱でありながら、さらに伸びている超優良カテゴリ」**であることが一目でわかります。
