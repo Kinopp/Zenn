@@ -1,5 +1,5 @@
 ---
-title: "第12章 分析関数②（全8問）"
+title: "＜未反映＞第12章 分析関数②（全10問）"
 free: false
 ---
 
@@ -749,3 +749,403 @@ flowchart LR
 Oracleには似た関数で`PERCENTILE_DISC`も存在します。`PERCENTILE_CONT`は連続的（Continuous）で値の間を計算（補間）するため、正確な統計値を出したいときに向いており、結果がデータにない数値になることもあります。`PERCENTILE_DISC`は離散的（Discrete）でデータの中に存在する値から選ぶため、「実在する値」の中から代表者を選びたいときに向いています。
 
 `PERCENTILE_CONT`で中央値を出し、`AVG`との差分を見ることで、「この部署の平均給与は高いですが、実は一部の管理職が引き上げているだけで、一般社員のボリュームゾーンはもっと低いですよ」といった、より実態に即した分析報告ができるようになります。
+
+----
+<br><br>
+
+# 【完全版】問題12-21：IGNORE NULLSによる欠損値の前方補完（為替レートの穴埋め）
+### 難易度：★★★☆☆ (Lv.3)
+## 問題
+経理部門が管理している月次の為替レート表は、レートが変動した月にだけ値が記録されており、変動がなかった月は`NULL`のまま放置されています。この「歯抜け」のレート表を、**直近に記録されていたレートで埋める（前方補完する）**SQLを作成してください。
+
+**【条件およびルール】**
+* データは通貨（`CURRENCY_CD`）ごとに、`RATE_MONTH`（対象月）の昇順で並んでいます。
+* `RATE`列にレートが記録されている月は、その値をそのまま表示してください。
+* `RATE`列が`NULL`の月は、**同じ通貨の中で直近に記録されていた（NULLではない）レート**を使って埋めてください。
+* 埋めた結果は`FILLED_RATE`列として表示してください（`RATE`列自体は変更しません）。
+* 結果は通貨コードの昇順、次に対象月の昇順で表示してください。
+
+**【前提データ（WITH句）】**
+```sql
+WITH exchange_rates AS (
+    SELECT DATE '2024-01-01' AS rate_month, 'USD' AS currency_cd, 150.00 AS rate FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'USD', 148.50 FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'USD', 152.00 FROM dual UNION ALL
+    SELECT DATE '2024-01-01', 'EUR', 160.00 FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'EUR', 158.00 FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'EUR', NULL   FROM dual
+)
+SELECT * FROM exchange_rates
+```
+
+## 期待する結果
+| CURRENCY_CD | RATE_MONTH | RATE  | FILLED_RATE | 
+| ----------- | ---------- | ----- | ----------- | 
+| EUR         | 2024/01    | 160   | 160         | 
+| EUR         | 2024/02    |       | 160         | 
+| EUR         | 2024/03    |       | 160         | 
+| EUR         | 2024/04    | 158   | 158         | 
+| EUR         | 2024/05    |       | 158         | 
+| EUR         | 2024/06    |       | 158         | 
+| USD         | 2024/01    | 150   | 150         | 
+| USD         | 2024/02    |       | 150         | 
+| USD         | 2024/03    | 148.5 | 148.5       | 
+| USD         | 2024/04    |       | 148.5       | 
+| USD         | 2024/05    |       | 148.5       | 
+| USD         | 2024/06    | 152   | 152         | 
+
+## 解答例
+```sql:例1：NG例（単純なLAGでは埋まらない）
+WITH exchange_rates AS (
+    SELECT DATE '2024-01-01' AS rate_month, 'USD' AS currency_cd, 150.00 AS rate FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'USD', 148.50 FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'USD', 152.00 FROM dual UNION ALL
+    SELECT DATE '2024-01-01', 'EUR', 160.00 FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'EUR', 158.00 FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'EUR', NULL   FROM dual
+)
+SELECT
+    currency_cd,
+    TO_CHAR(rate_month, 'YYYY/MM') AS rate_month,
+    rate,
+    NVL(rate,
+        LAG(rate) OVER(PARTITION BY currency_cd
+                        ORDER BY rate_month)
+    ) AS filled_rate
+FROM
+    exchange_rates
+ORDER BY
+    currency_cd,
+    rate_month
+```
+```sql:例2：正解（LAGにIGNORE NULLSを付与）
+WITH exchange_rates AS (
+    SELECT DATE '2024-01-01' AS rate_month, 'USD' AS currency_cd, 150.00 AS rate FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'USD', 148.50 FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'USD', 152.00 FROM dual UNION ALL
+    SELECT DATE '2024-01-01', 'EUR', 160.00 FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'EUR', 158.00 FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'EUR', NULL   FROM dual
+)
+SELECT
+    currency_cd,
+    TO_CHAR(rate_month, 'YYYY/MM') AS rate_month,
+    rate,
+    NVL(rate,
+        LAG(rate) IGNORE NULLS OVER(PARTITION BY currency_cd
+                                     ORDER BY rate_month)
+    ) AS filled_rate
+FROM
+    exchange_rates
+ORDER BY
+    currency_cd,
+    rate_month
+```
+```sql:例3：別解（LAST_VALUEにIGNORE NULLSを付与）
+WITH exchange_rates AS (
+    SELECT DATE '2024-01-01' AS rate_month, 'USD' AS currency_cd, 150.00 AS rate FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'USD', 148.50 FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'USD', 152.00 FROM dual UNION ALL
+    SELECT DATE '2024-01-01', 'EUR', 160.00 FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'EUR', 158.00 FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'EUR', NULL   FROM dual
+)
+SELECT
+    currency_cd,
+    TO_CHAR(rate_month, 'YYYY/MM') AS rate_month,
+    rate,
+    LAST_VALUE(rate IGNORE NULLS) OVER(
+        PARTITION BY currency_cd
+        ORDER BY rate_month
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS filled_rate
+FROM
+    exchange_rates
+ORDER BY
+    currency_cd,
+    rate_month
+```
+
+## 解説
+これまでの`LAG`／`LEAD`（問題12-8、12-14、12-18）は、常に「すぐ隣の行」を見に行くだけでした。しかし実務のデータでは、今回の為替レートのように「値が変わったときだけ記録され、変わらない期間は空欄（NULL）」というテーブルがよく登場します。このNULLを、隣の行ではなく「最後に値が入っていた行」まで遡って埋める、というのが今回のテーマです。
+
+まず例1（NG例）でつまずきを体験してみましょう。
+```sql
+NVL(rate, LAG(rate) OVER(PARTITION BY currency_cd ORDER BY rate_month))
+```
+USDの2月はNULLですが、1月（150.00）という値が入っているため、単純な`LAG`でも150.00が埋まり、一見うまくいったように見えます。ところが5月を見てください。5月のひとつ前である4月も、実はNULLです。`LAG`は「1行前の生の値」を機械的に持ってくるだけなので、その1行前がNULLならNULLがそのまま返ってきてしまいます。
+
+```mermaid
+flowchart LR
+    A["1月：150.00"] --> B["2月：NULL"]
+    B --> C["3月：148.50"]
+    C --> D["4月：NULL"]
+    D --> E["5月：NULL"]
+    E --> F["6月：152.00"]
+    C -.->|"単純なLAGは4月のNULLしか見えない"| D
+    D -.->|"4月もNULLなので5月はNULLのまま"| E
+```
+
+つまり、NULLが**2つ以上連続**すると、単純な`LAG`による前方補完は途中で息切れしてしまいます。今回のデータはこの罠にわざとはまるように、USDの4月・5月とEURの2月・3月／5月・6月に、あえて連続したNULLを配置しています。
+
+ここで登場するのが`IGNORE NULLS`です。
+```sql
+LAG(rate) IGNORE NULLS OVER(PARTITION BY currency_cd ORDER BY rate_month)
+```
+`IGNORE NULLS`を付けると、`LAG`は「1行前」ではなく「**NULLを飛ばして、直近に値が入っていた行**」を探しに行くようになります。5月の場合、4月はNULLなので無視し、3月もチェックし……というように、値が見つかるまで何行でも遡ってくれます。
+
+```mermaid
+flowchart LR
+    A["1月：150.00"] --> B["2月：NULL"]
+    B --> C["3月：148.50"]
+    C --> D["4月：NULL"]
+    D --> E["5月：NULL"]
+    E --> F["6月：152.00"]
+    C -.->|"IGNORE NULLSは4月・5月を飛び越えて参照"| E
+```
+
+外側の`NVL(rate, ...)`は、「自分自身に値があればそれを優先し、なければ補完値を使う」という切り替えの役割です。`LAG`は常に「自分より前」の値しか見ないため、3月のように自分自身に値がある行では影響を受けません。
+
+:::message
+### IGNORE NULLSを書く位置に注意（LAG/LEAD と FIRST_VALUE/LAST_VALUE の違い）
+`IGNORE NULLS`はどの分析関数でも同じ位置に書けるわけではありません。
+
+| 関数 | 書き方 | IGNORE NULLSの位置 |
+| :--- | :--- | :--- |
+| `LAG` / `LEAD` | `LAG(rate) IGNORE NULLS OVER(...)` | **カッコの外**（OVERの直前） |
+| `FIRST_VALUE` / `LAST_VALUE` | `LAST_VALUE(rate IGNORE NULLS) OVER(...)` | **カッコの中**（引数の直後） |
+
+この位置を逆にする（例：`LAG(rate IGNORE NULLS)`や`LAST_VALUE(rate) IGNORE NULLS`）と構文エラーになります。関数によって置き場所が違う、というのはOracle SQLの分析関数群でも特に間違えやすいポイントなので、実際に手を動かして書いてみることをお勧めします。
+:::
+
+例3は`LAST_VALUE`を使った別解です。
+```sql
+LAST_VALUE(rate IGNORE NULLS) OVER(
+    PARTITION BY currency_cd
+    ORDER BY rate_month
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+)
+```
+`LAST_VALUE`は「ウィンドウの範囲内で最後の値」を返す関数です。`ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`（先頭から自分自身まで）という範囲を指定し、そこに`IGNORE NULLS`を組み合わせることで、「自分を含めて、そこまでの範囲でNULLではない最後の値」＝「自分の値、なければ直近の補完値」を一発で取得できます。`NVL`で自分自身の値と組み合わせる必要がなく、例2よりもシンプルに書けるのが利点です。ただし`ROWS BETWEEN`の範囲指定を忘れる（デフォルトの範囲に頼る）と意図しない結果になることがあるため、範囲は明示しておくと安全です。
+
+| 方式 | 特徴 |
+| :--- | :--- |
+| 例2（`LAG` + `IGNORE NULLS` + `NVL`） | 「自分の値」と「補完値」の切り替えロジックが明示的で読みやすい |
+| 例3（`LAST_VALUE` + `IGNORE NULLS`） | 1つの関数で完結し記述がシンプルだが、フレーム指定を省略すると事故りやすい |
+
+このテクニックは、為替レートだけでなく、株価の休場日の補完、センサーの欠測値の補完、価格改定履歴を持つ商品マスタで「その日時点の有効価格」を求める場合など、応用範囲の広いパターンです。「値が変わった時だけ記録する」という設計のテーブルに出会ったら、`IGNORE NULLS`を思い出してください。
+
+---
+<br><br>
+
+# 【完全版】問題12-22：WIDTH_BUCKETによる度数分布表（ヒストグラム）の作成
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+とある店舗の1日の購入履歴（返品によるマイナス金額や、まとめ買いによる高額決済も含む）をもとに、購入金額の**度数分布表（ヒストグラム）**を作成してください。
+
+**【条件およびルール】**
+* 購入金額を **0円から10,000円まで、2,000円刻みの5つの区分（ビン）** に分類してください。
+* 0円未満（返品によるマイナス金額）は「**0円未満（返品）**」という区分にまとめてください。
+* 10,000円以上（範囲の上限を超える高額決済）は「**10,000円以上（VIP）**」という区分にまとめてください。
+* 各区分に該当する件数（`PURCHASE_COUNT`）を集計してください。
+* 結果は区分番号（`BUCKET_NO`）の昇順で表示してください。
+
+**【前提データ（WITH句）】**
+```sql
+WITH sales_log AS (
+    SELECT 1200  AS purchase_amount FROM dual UNION ALL
+    SELECT 3400  FROM dual UNION ALL
+    SELECT 7600  FROM dual UNION ALL
+    SELECT 500   FROM dual UNION ALL
+    SELECT 2200  FROM dual UNION ALL
+    SELECT 9800  FROM dual UNION ALL
+    SELECT 4300  FROM dual UNION ALL
+    SELECT 6700  FROM dual UNION ALL
+    SELECT 1500  FROM dual UNION ALL
+    SELECT 8900  FROM dual UNION ALL
+    SELECT 3300  FROM dual UNION ALL
+    SELECT 5600  FROM dual UNION ALL
+    SELECT -500  FROM dual UNION ALL  -- 返品
+    SELECT 7200  FROM dual UNION ALL
+    SELECT 15000 FROM dual UNION ALL  -- VIP顧客のまとめ買い
+    SELECT 4800  FROM dual UNION ALL
+    SELECT 6100  FROM dual UNION ALL
+    SELECT 2700  FROM dual
+)
+SELECT * FROM sales_log
+```
+
+## 期待する結果
+| BUCKET_NO | PRICE_RANGE         | PURCHASE_COUNT | 
+| --------- | ------------------- | -------------- | 
+| 0         | 0円未満（返品）     | 1              | 
+| 1         | 0～2,000円未満      | 3              | 
+| 2         | 2,000～4,000円未満  | 4              | 
+| 3         | 4,000～6,000円未満  | 3              | 
+| 4         | 6,000～8,000円未満  | 4              | 
+| 5         | 8,000～10,000円未満 | 2              | 
+| 6         | 10,000円以上（VIP） | 1              | 
+
+## 解答例
+```sql:例1：WIDTH_BUCKETをGROUP BYに直接使用
+WITH sales_log AS (
+    SELECT 1200  AS purchase_amount FROM dual UNION ALL
+    SELECT 3400  FROM dual UNION ALL
+    SELECT 7600  FROM dual UNION ALL
+    SELECT 500   FROM dual UNION ALL
+    SELECT 2200  FROM dual UNION ALL
+    SELECT 9800  FROM dual UNION ALL
+    SELECT 4300  FROM dual UNION ALL
+    SELECT 6700  FROM dual UNION ALL
+    SELECT 1500  FROM dual UNION ALL
+    SELECT 8900  FROM dual UNION ALL
+    SELECT 3300  FROM dual UNION ALL
+    SELECT 5600  FROM dual UNION ALL
+    SELECT -500  FROM dual UNION ALL
+    SELECT 7200  FROM dual UNION ALL
+    SELECT 15000 FROM dual UNION ALL
+    SELECT 4800  FROM dual UNION ALL
+    SELECT 6100  FROM dual UNION ALL
+    SELECT 2700  FROM dual
+)
+SELECT
+    WIDTH_BUCKET(purchase_amount, 0, 10000, 5) AS bucket_no,
+    CASE WIDTH_BUCKET(purchase_amount, 0, 10000, 5)
+        WHEN 0 THEN '0円未満（返品）'
+        WHEN 1 THEN '0～2,000円未満'
+        WHEN 2 THEN '2,000～4,000円未満'
+        WHEN 3 THEN '4,000～6,000円未満'
+        WHEN 4 THEN '6,000～8,000円未満'
+        WHEN 5 THEN '8,000～10,000円未満'
+        WHEN 6 THEN '10,000円以上（VIP）'
+    END AS price_range,
+    COUNT(*) AS purchase_count
+FROM
+    sales_log
+GROUP BY
+    WIDTH_BUCKET(purchase_amount, 0, 10000, 5)
+ORDER BY
+    bucket_no
+```
+```sql:例2：CTEでビン番号を先に確定させる（可読性重視）
+WITH sales_log AS (
+    SELECT 1200  AS purchase_amount FROM dual UNION ALL
+    SELECT 3400  FROM dual UNION ALL
+    SELECT 7600  FROM dual UNION ALL
+    SELECT 500   FROM dual UNION ALL
+    SELECT 2200  FROM dual UNION ALL
+    SELECT 9800  FROM dual UNION ALL
+    SELECT 4300  FROM dual UNION ALL
+    SELECT 6700  FROM dual UNION ALL
+    SELECT 1500  FROM dual UNION ALL
+    SELECT 8900  FROM dual UNION ALL
+    SELECT 3300  FROM dual UNION ALL
+    SELECT 5600  FROM dual UNION ALL
+    SELECT -500  FROM dual UNION ALL
+    SELECT 7200  FROM dual UNION ALL
+    SELECT 15000 FROM dual UNION ALL
+    SELECT 4800  FROM dual UNION ALL
+    SELECT 6100  FROM dual UNION ALL
+    SELECT 2700  FROM dual
+),
+-- ① 1件ずつビン番号を先に確定させる
+bucketed AS (
+    SELECT
+        purchase_amount,
+        WIDTH_BUCKET(purchase_amount, 0, 10000, 5) AS bucket_no
+    FROM
+        sales_log
+)
+-- ② ビン番号ごとに件数を集計し、ラベルを付与する
+SELECT
+    bucket_no,
+    CASE bucket_no
+        WHEN 0 THEN '0円未満（返品）'
+        WHEN 1 THEN '0～2,000円未満'
+        WHEN 2 THEN '2,000～4,000円未満'
+        WHEN 3 THEN '4,000～6,000円未満'
+        WHEN 4 THEN '6,000～8,000円未満'
+        WHEN 5 THEN '8,000～10,000円未満'
+        WHEN 6 THEN '10,000円以上（VIP）'
+    END AS price_range,
+    COUNT(*) AS purchase_count
+FROM
+    bucketed
+GROUP BY
+    bucket_no
+ORDER BY
+    bucket_no
+```
+
+## 解説
+これまでの分布・統計シリーズ（`NTILE`、`CUME_DIST`、`PERCENT_RANK`、`PERCENTILE_CONT`）は、いずれも「データを小さい順に並べて、何番目・何%地点か」を見る関数でした。今回の`WIDTH_BUCKET`は少し毛色が違い、「値そのものの範囲」を等間隔に区切って、各区分に何件あるかを数える関数です。いわゆる「ヒストグラム」を作るための専用関数だと考えてください。
+
+```sql
+WIDTH_BUCKET(purchase_amount, 0, 10000, 5)
+```
+引数は順に「①区分したい値」「②範囲の下限」「③範囲の上限」「④区分（ビン）の数」です。今回は「0円から10,000円までを5個に区切る」ので、1つのビンの幅は自動的に`(10000 - 0) / 5 = 2000円`になります。
+
+```mermaid
+flowchart LR
+    U["範囲外（下）
+    0円未満
+    → bucket 0"] --- B1["bucket 1
+    0～2,000円"]
+    B1 --- B2["bucket 2
+    2,000～4,000円"]
+    B2 --- B3["bucket 3
+    4,000～6,000円"]
+    B3 --- B4["bucket 4
+    6,000～8,000円"]
+    B4 --- B5["bucket 5
+    8,000～10,000円"]
+    B5 --- O["範囲外（上）
+    10,000円以上
+    → bucket 6"]
+```
+
+ここで最も重要なポイントは、指定した「5」という数に対して、**実際に返ってくるビン番号は0から6までの7種類ある**ということです。`WIDTH_BUCKET`は、指定した範囲（今回は0〜10,000円）に収まらないデータも見捨てず、「範囲より小さい値」はビン**0**（アンダーフロー）、「範囲より大きい値」はビン**（指定した数）+1**（オーバーフロー）として、必ずどこかに分類してくれます。
+
+今回のデータでは、返品によるマイナス金額`-500`はビン0に、まとめ買いの高額決済`15000`はビン6に、それぞれ自動的に振り分けられています。もし範囲チェックをせずに単純な`CASE WHEN`を書いていた場合、この2件は「どの条件にも当てはまらない」としてNULL扱いになってしまい、集計から漏れてしまう危険がありました。`WIDTH_BUCKET`を使えば、こうした想定外の値も含めて漏れなく全件を分類できます。
+
+:::message
+### なぜGROUP BYにWIDTH_BUCKETをそのまま書けるのか
+例1では`GROUP BY WIDTH_BUCKET(purchase_amount, 0, 10000, 5)`のように、関数の呼び出しをそのまま`GROUP BY`に書いています。これは、`WIDTH_BUCKET`が「同じ引数を渡せば必ず同じ結果を返す」決定的な関数だからです。Oracleでは、列名だけでなく、このような決定的な計算式そのものを`GROUP BY`の対象にすることができます。ただし、`SELECT`句と`GROUP BY`句の両方に同じ式を書く必要があるため、例2のようにCTEで先にビン番号を確定させておくと、以降のコードが読みやすくなり、修正時の書き漏れも防げます。
+:::
+
+**NTILEとの違い**
+
+`WIDTH_BUCKET`は、これまでの12-10で扱った`NTILE`と混同されがちですが、区切り方の考え方が根本的に異なります。
+
+| 関数 | 何を均等にするか | 各区分の件数 | 各区分の値の幅 |
+| :--- | :--- | :--- | :--- |
+| `NTILE(n)` | **件数** | 均等（またはほぼ均等） | 不均等になりうる |
+| `WIDTH_BUCKET` | **値の範囲** | 不均等になりうる | 均等 |
+
+`NTILE`は「全体を件数で4等分・10等分」というように、**箱（区分）の中身の人数**を揃えるための関数でした。一方`WIDTH_BUCKET`は、値の「物差し」そのものを均等な長さに切り分けるため、データが偏っていれば、ある区分には1件しか入らず、別の区分には10件入る、ということが普通に起こります。実際に期待する結果を見ても、区分ごとの件数は1〜4件とばらついています。
+
+「上位10%の顧客を優遇したい」のように**人数ベース**で区切りたいときは`NTILE`、「価格帯ごとに何件売れたかを見たい」のように**値そのものの目盛り**で区切りたいときは`WIDTH_BUCKET`、という使い分けを覚えておくと実務で迷いません。度数分布表やヒストグラムはBIツールでもよく使われる可視化ですが、`WIDTH_BUCKET`を使えばSQLの中だけで、その集計元データを1回のクエリで作り切ることができます。
