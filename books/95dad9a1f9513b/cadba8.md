@@ -1,5 +1,5 @@
 ---
-title: "第14章 階層構造の取り扱い②（全1問）"
+title: "第14章 階層構造の取り扱い②（全7問：うち問題のみ6問）"
 free: false
 ---
 
@@ -385,8 +385,158 @@ CONNECT BY
 
 このテクニックは、今回の決裁権限の一括判定以外にも、「あるプロジェクトのリーダー（起点）を、そのプロジェクトに参加する全メンバーの行に一括表示する」プロジェクト管理システムの担当者表示、「各フランチャイズ本部（起点）を、そのグループに属する全店舗の行に一括表示する」フランチャイズ店舗管理システムなど、「起点の情報を配下全体にコピーしたい」場面全般で活用できます。
 
+---
+<br><br>
 
 
+# 【完全版】問題14-12：入れ子集合モデル（Nested Sets Model）によるサブツリー抽出
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+これまでの14-1〜14-11では、Oracle独自の`CONNECT BY`（隣接リストモデル）や再帰CTEを使って階層構造を扱ってきました。しかし木構造の実装方法はこれだけではありません。
+
+「入れ子集合モデル（Nested Sets Model）」は、各ノードに`lft`（左値）・`rgt`（右値）という2つの数値をあらかじめ採番しておくことで、**再帰処理を一切使わずに`BETWEEN`だけでサブツリー全体を一発抽出**できる設計手法です。`lft`・`rgt`は、木を深さ優先で辿ったときに各ノードを「行きがけ」と「帰りがけ」の2回通過する順序を採番したもので、あるノードの子孫はすべて、そのノードの`lft`と`rgt`の間に値を持つという性質を利用します。
+
+以下は、ある小規模な開発組織を「あらかじめ`lft`/`rgt`を採番済み」の状態でモデル化したデータです。
+
+```sql
+WITH org_nested_sets (node_id, node_name, lft, rgt) AS (
+    SELECT 1, 'A. CEO 佐藤',              1,  18 FROM DUAL UNION ALL
+    SELECT 2, 'B. VP営業 鈴木',           2,   7 FROM DUAL UNION ALL
+    SELECT 3, 'C. VP開発 田中',           8,  17 FROM DUAL UNION ALL
+    SELECT 4, 'D. 営業マネージャー1 高橋', 3,   4 FROM DUAL UNION ALL
+    SELECT 5, 'E. 営業マネージャー2 伊藤', 5,   6 FROM DUAL UNION ALL
+    SELECT 6, 'F. 開発マネージャー1 渡辺', 9,  14 FROM DUAL UNION ALL
+    SELECT 7, 'G. 開発マネージャー2 山本', 15, 16 FROM DUAL UNION ALL
+    SELECT 8, 'H. 開発者1 中村',          10, 11 FROM DUAL UNION ALL
+    SELECT 9, 'I. 開発者2 小林',          12, 13 FROM DUAL
+)
+```
+
+上記の`org_nested_sets`をデータソースとして参照し、**「VP開発 田中」（C）を根とするサブツリー全体**（C自身とその配下全員）を抽出してください。
+
+**【抽出・編集ルール】**
+1. `BETWEEN`（または相当の範囲比較）のみを用い、再帰CTEや`CONNECT BY`は使用しないこと。
+2. **INDENTED_NAME**：Cを深さ1とした相対階層に応じて、ノード名の前に「-」を2つずつインデントとして付与すること。
+3. **DEPTH**：Cを1とした相対的な深さ。
+4. `lft`の昇順（＝深さ優先探索の訪問順）に並べること。
+
+## 期待する結果
+| INDENTED_NAME               | DEPTH | 
+| ----------------------------- | ------- | 
+| C. VP開発 田中              | 1       | 
+| --F. 開発マネージャー1 渡辺 | 2       | 
+| ----H. 開発者1 中村         | 3       | 
+| ----I. 開発者2 小林         | 3       | 
+| --G. 開発マネージャー2 山本 | 2       | 
 
 
+## 解答例、解説
+[![](https://static.zenn.studio/user-upload/d958a6990064-20260508.png)](https://zenn.dev/kinopp/books/0b24d659785f31)
 
+----
+<br><br>
+
+# 【完全版】問題14-13：経路列挙モデル（Path Enumeration Model）── 動的生成 vs 実列保持
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+問題14-3では、`EMPLOYEES`テーブルに対して再帰CTEを使い、`hierarchy_path`という経路文字列を**クエリ実行のたびにその場で組み立てて**いました。しかし実務では、「経路文字列をあらかじめ実列（マテリアライズドカラム）としてテーブルに持たせておく」という設計もよく採用されます。これが「経路列挙モデル（Path Enumeration Model）」の本来の姿です。
+
+以下は、ECサイトの商品カテゴリマスタを、**あらかじめ`MAT_PATH`列に経路文字列を格納済み**の状態でモデル化したデータです。`MAT_PATH`は、ルートから自分自身までの`CATEGORY_ID`を`/`で連結し、前後にも`/`を付与した文字列です（例：`/1/5/6/`）。
+
+```sql
+WITH category_master (category_id, parent_id, category_name, mat_path) AS (
+    SELECT 1, NULL, '家電',            '/1/'       FROM DUAL UNION ALL
+    SELECT 2, 1,    'パソコン',         '/1/2/'     FROM DUAL UNION ALL
+    SELECT 3, 2,    'ノートPC',         '/1/2/3/'   FROM DUAL UNION ALL
+    SELECT 4, 2,    'デスクトップPC',   '/1/2/4/'   FROM DUAL UNION ALL
+    SELECT 5, 1,    '周辺機器',         '/1/5/'     FROM DUAL UNION ALL
+    SELECT 6, 5,    'マウス',           '/1/5/6/'   FROM DUAL UNION ALL
+    SELECT 7, 5,    'キーボード',       '/1/5/7/'   FROM DUAL UNION ALL
+    SELECT 8, 6,    'ゲーミングマウス', '/1/5/6/8/' FROM DUAL
+)
+```
+
+上記の`category_master`をデータソースとして、**再帰CTEや`CONNECT BY`を一切使わず**、`MAT_PATH`列に対する`LIKE`演算だけで以下を算出してください。
+
+**【抽出・編集ルール】**
+1. **INDENTED_NAME**：`MAT_PATH`内の`/`の数から算出した階層の深さに応じて、カテゴリ名の前に「-」を2つずつインデントとして付与すること。
+2. **BREADCRUMB**：ルートから自分自身までの経路を「カテゴリ名 > カテゴリ名 > ...」の形式で連結した、いわゆる「パンくずリスト」を表示すること。
+3. **DESCENDANT_COUNT**：自分自身を除いた、配下カテゴリ（間接的な子孫も含む）の件数。
+4. **並び順**：`MAT_PATH`の昇順で、深さ優先探索と同じ順序になるようにすること。
+
+## 期待する結果
+| INDENTED_NAME          | BREADCRUMB                                  | DESCENDANT_COUNT | 
+| ------------------------ | --------------------------------------------- | ------------------ | 
+| 家電                   | 家電                                        | 7                  | 
+| --パソコン             | 家電 > パソコン                             | 2                  | 
+| ----ノートPC           | 家電 > パソコン > ノートPC                  | 0                  | 
+| ----デスクトップPC     | 家電 > パソコン > デスクトップPC            | 0                  | 
+| --周辺機器             | 家電 > 周辺機器                             | 3                  | 
+| ----マウス             | 家電 > 周辺機器 > マウス                    | 1                  | 
+| ------ゲーミングマウス | 家電 > 周辺機器 > マウス > ゲーミングマウス | 0                  | 
+| ----キーボード         | 家電 > 周辺機器 > キーボード                | 0                  | 
+
+「ゲーミングマウス」（マウスの子）が「キーボード」より**前**に表示される点に注目してください。これは`MAT_PATH`の文字列としての昇順ソートが、そのまま深さ優先探索の順序と一致するためです。
+
+## 解答例、解説
+[![](https://static.zenn.studio/user-upload/d958a6990064-20260508.png)](https://zenn.dev/kinopp/books/0b24d659785f31)
+
+----
+<br><br>
+
+# 【完全版】問題14-14：推移閉包（Transitive Closure）テーブルの生成 ── 権限判定への応用
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+これまでの階層問い合わせは「特定の1人（あるいは1つの根）を起点に、そこから辿れる範囲を探索する」という使い方が中心でした。しかし実務では、「AさんはBさんの（直接・間接を問わない）上司にあたるか？」といった**任意の2人の組み合わせ**について、祖先・子孫の関係を都度チェックしたい場面が多くあります。
+
+そのたびに`CONNECT BY`を実行して探索し直すのは非効率です。そこで登場するのが「**推移閉包（Transitive Closure）**」という考え方です。これは、木（あるいはグラフ）に存在する**すべての祖先-子孫のペアとその距離**を、あらかじめ1枚の表としてまとめておく手法です。一度この表を作ってしまえば、以降は単純な`WHERE`検索だけで「AはBの上司か」を判定でき、再帰処理を毎回走らせる必要がなくなります。
+
+検証用に、HRスキーマの`EMPLOYEES`テーブルの一部を使用します。
+```sql
+-- 本問題の検証用データソース（クエリの先頭に配置します）
+WITH test_employees AS (
+    SELECT
+        employee_id,
+        manager_id,
+        first_name || ' ' || last_name AS emp_name
+    FROM
+        hr.employees
+    WHERE
+        employee_id IN (100, 101, 102, 103, 104, 108, 109, 110)
+)
+```
+組織構造は以下のとおりです。
+```
+100 Steven King
+├─101 Neena Yang
+│  └─108 Nancy Gruenberg
+│     ├─109 Daniel Faviet
+│     └─110 John Chen
+└─102 Lex Garcia
+   └─103 Alexander James
+      └─104 Bruce Miller
+```
+
+上記の`test_employees`をデータソースとし、以下の手順で推移閉包テーブルを構築したうえで、各従業員について **「自分より上位にいる人数（直接・間接を問わない）」** と **「自分より下位にいる人数（直接・間接を問わない）」** を求めてください。
+
+**【抽出・編集ルール】**
+1. **STEP1（推移閉包の構築）**：`test_employees`の**全ての行を起点候補**として`CONNECT BY`で展開し、`ANCESTOR_ID`（起点＝祖先）・`DESCENDANT_ID`（到達先＝子孫）・`DISTANCE`（階層差。自分自身との組は`0`）の3列からなる推移閉包を、`WITH`句内で構築すること。
+2. **STEP2（集計）**：STEP1で構築した推移閉包を**再度`CONNECT BY`を使わずに**参照するだけで、以下を算出すること。
+   * **ANCESTOR_COUNT**：自分より上位にいる人数（`DISTANCE >= 1`の祖先の数）
+   * **DESCENDANT_COUNT**：自分より下位にいる人数（`DISTANCE >= 1`の子孫の数）
+3. **並び順**：`EMPLOYEE_ID`昇順。
+
+## 期待する結果
+| EMPLOYEE_ID | EMP_NAME        | ANCESTOR_COUNT | DESCENDANT_COUNT | 
+| ------------- | ----------------- | ---------------- | ------------------ | 
+| 100           | Steven King     | 0                | 7                  | 
+| 101           | Neena Yang      | 1                | 3                  | 
+| 102           | Lex Garcia      | 1                | 2                  | 
+| 103           | Alexander James | 2                | 1                  | 
+| 104           | Bruce Miller    | 3                | 0                  | 
+| 108           | Nancy Gruenberg | 2                | 2                  | 
+| 109           | Daniel Faviet   | 3                | 0                  | 
+| 110           | John Chen       | 3                | 0                  | 
+
+## 解答例、解説
+[![](https://static.zenn.studio/user-upload/d958a6990064-20260508.png)](https://zenn.dev/kinopp/books/0b24d659785f31)

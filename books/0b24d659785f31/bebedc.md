@@ -1,5 +1,5 @@
 ---
-title: "第8章 集計関数（全10問）"
+title: "第8章 集計関数①（全12問）"
 free: false
 ---
 
@@ -961,3 +961,416 @@ flowchart TD
 `ORDER BY gender, marital_status`とすることで、`ALL`（Aで始まるため先頭に来やすい）、`F`（Female）のグループ、`M`（Male）のグループ、という順に自然と並びます。
 
 この`CUBE`で得られた結果は、以前学んだ「クロス集計（縦持ちから横持ち）」のテクニックと組み合わせることで、ExcelのピボットテーブルのようなレポートをSQLだけで再現できます。住所（国＞県＞市）や時間（年＞月＞日）のように階層がある場合は`ROLLUP`、性別×年代やカテゴリ×地域のように項目を入れ替えて多角的に見たい場合は`CUBE`、という使い分けを覚えておくとよいと思います。
+
+---
+<br><br>
+
+# 【完全版】問題8-11：任意の組み合わせだけを指定する集計（GROUPING SETS）
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+経営企画部から、キャンペーン結果を分析するための売上レポート作成依頼がありました。
+「地域（`REGION`）× 商品カテゴリ（`CATEGORY`）ごとの売上明細」と、「会社全体の総売上」の**2種類だけ**が欲しいとのことです。
+前回（問題8-7）の`ROLLUP`のような「地域ごとの小計」や、問題8-10の`CUBE`のような「カテゴリだけの小計」は、今回の分析目的にはノイズになるため**不要**と念を押されています。
+
+再現性のため、以下の`WITH`句で売上データを用意します。
+
+```sql
+WITH sales_data AS (
+    SELECT 'east' AS region, 'electronics' AS category, 1200 AS amount FROM dual UNION ALL
+    SELECT 'east', 'clothing',     800 FROM dual UNION ALL
+    SELECT 'east', 'grocery',      500 FROM dual UNION ALL
+    SELECT 'west', 'electronics', 1500 FROM dual UNION ALL
+    SELECT 'west', 'clothing',     600 FROM dual UNION ALL
+    SELECT 'west', 'grocery',      900 FROM dual
+)
+SELECT * FROM sales_data
+```
+
+**【集計・出力ルール】**
+* 「地域×カテゴリの明細」と「会社全体の総計」の**2パターンのみ**を1つの結果セットで取得すること（地域だけの小計、カテゴリだけの小計は含めないこと）。
+* 集計によってまとめられた行（地域・カテゴリがNULLになる行）には、それぞれ`'全社'`／`'合計'`という文字列を表示すること。
+* 表示順は、明細行が先、総計行が最後になるようにし、明細行の中では地域・カテゴリの昇順とすること。
+
+## 期待する結果
+| REGION | CATEGORY    | TOTAL_AMOUNT |
+| ------ | ----------- | ------------ |
+| east   | clothing    | 800          |
+| east   | electronics | 1200         |
+| east   | grocery     | 500          |
+| west   | clothing    | 600          |
+| west   | electronics | 1500         |
+| west   | grocery     | 900          |
+| 全社   | 合計        | 5500         |
+
+## 解答例
+```sql:例1：NG例①（ROLLUPでは不要な小計まで出てしまう）
+WITH sales_data AS (
+    SELECT 'east' AS region, 'electronics' AS category, 1200 AS amount FROM dual UNION ALL
+    SELECT 'east', 'clothing',     800 FROM dual UNION ALL
+    SELECT 'east', 'grocery',      500 FROM dual UNION ALL
+    SELECT 'west', 'electronics', 1500 FROM dual UNION ALL
+    SELECT 'west', 'clothing',     600 FROM dual UNION ALL
+    SELECT 'west', 'grocery',      900 FROM dual
+)
+SELECT
+    NVL(region,   '全社') AS region,
+    NVL(category, '合計') AS category,
+    SUM(amount)           AS total_amount
+FROM
+    sales_data
+GROUP BY
+    ROLLUP(region, category)
+ORDER BY
+    GROUPING(region),
+    region,
+    category
+```
+```sql:例2：NG例②（GROUPING SETSで列を直書きするとORA-00979）
+WITH sales_data AS (
+    SELECT 'east' AS region, 'electronics' AS category, 1200 AS amount FROM dual UNION ALL
+    SELECT 'east', 'clothing',     800 FROM dual UNION ALL
+    SELECT 'east', 'grocery',      500 FROM dual UNION ALL
+    SELECT 'west', 'electronics', 1500 FROM dual UNION ALL
+    SELECT 'west', 'clothing',     600 FROM dual UNION ALL
+    SELECT 'west', 'grocery',      900 FROM dual
+)
+SELECT
+    NVL(region,   '全社') AS region,   -- ORA-00979が発生する箇所
+    NVL(category, '合計') AS category,
+    SUM(amount)           AS total_amount
+FROM
+    sales_data
+GROUP BY
+    GROUPING SETS( (region, category), () )
+ORDER BY
+    GROUPING(region),
+    region,
+    category
+-- ORA-00979: must appear in the GROUP BY clause or be used in an aggregate function
+```
+```sql:例3：NG例③（MAXで包むとエラーは消えるが総計行の値が誤る）
+WITH sales_data AS (
+    SELECT 'east' AS region, 'electronics' AS category, 1200 AS amount FROM dual UNION ALL
+    SELECT 'east', 'clothing',     800 FROM dual UNION ALL
+    SELECT 'east', 'grocery',      500 FROM dual UNION ALL
+    SELECT 'west', 'electronics', 1500 FROM dual UNION ALL
+    SELECT 'west', 'clothing',     600 FROM dual UNION ALL
+    SELECT 'west', 'grocery',      900 FROM dual
+)
+SELECT
+    NVL(MAX(sales_data.region),   '全社') AS region,   -- 総計行が 'west' になってしまう
+    NVL(MAX(sales_data.category), '合計') AS category, -- 総計行が 'grocery' になってしまう
+    SUM(sales_data.amount)                AS total_amount
+FROM
+    sales_data
+GROUP BY
+    GROUPING SETS( (sales_data.region, sales_data.category), () )
+ORDER BY
+    GROUPING(sales_data.region),
+    region,
+    category
+```
+```sql:例4：正解（GROUPINGで判定してから値を選択）
+WITH sales_data AS (
+    SELECT 'east' AS region, 'electronics' AS category, 1200 AS amount FROM dual UNION ALL
+    SELECT 'east', 'clothing',     800 FROM dual UNION ALL
+    SELECT 'east', 'grocery',      500 FROM dual UNION ALL
+    SELECT 'west', 'electronics', 1500 FROM dual UNION ALL
+    SELECT 'west', 'clothing',     600 FROM dual UNION ALL
+    SELECT 'west', 'grocery',      900 FROM dual
+)
+SELECT
+    CASE WHEN GROUPING(sales_data.region)   = 1 THEN '全社'
+         ELSE MAX(sales_data.region)   END AS region,
+    CASE WHEN GROUPING(sales_data.category) = 1 THEN '合計'
+         ELSE MAX(sales_data.category) END AS category,
+    SUM(sales_data.amount)                  AS total_amount
+FROM
+    sales_data
+GROUP BY
+    GROUPING SETS( (sales_data.region, sales_data.category), () )
+ORDER BY
+    GROUPING(sales_data.region),
+    region,
+    category
+```
+
+## 解説
+今回は、問題8-7で学んだ`ROLLUP`、問題8-10で学んだ`CUBE`に続く、多次元集計の3つ目の武器「`GROUPING SETS`」です。この3つを並べて理解することで、ようやく「集計句」のツールボックスが完成しますが、今回は3段階のつまずきを経由しながら学んでいきます。
+
+### つまずき①：ROLLUPでは不要な小計まで出てしまう
+まず例1（NG例①）です。`ROLLUP(region, category)`は、「地域×カテゴリの明細」「地域ごとの小計」「全体の総計」という3階層を自動生成します。実行するとエラーにはならず、一見それらしいレポートが出力されるため見逃しやすいのですが、実際には`east 合計: 2500`、`west 合計: 3000`という**依頼されていない地域小計の行**が2行紛れ込んでしまいます。
+
+```mermaid
+flowchart TD
+    A["ROLLUP(region, category)
+    が生成する3階層"] --> B["① 地域×カテゴリの明細（6行）"]
+    A --> C["② 地域ごとの小計（2行）
+    ❌ 今回は不要"]
+    A --> D["③ 全体の総計（1行）"]
+```
+
+`region`と`category`の間に「国＞都市」のような親子の階層関係がないにもかかわらず`ROLLUP`を使うと、意図しない中間集計が自動でついてきてしまう、という典型的な落とし穴です。
+
+### つまずき②：GROUPING SETSに書き換えるとORA-00979
+「必要な組み合わせだけを列挙すればよいのでは」と`GROUPING SETS( (region, category), () )`に書き換えたのが例2ですが、今度は実行した瞬間に別のエラーに遭遇します。
+
+```
+ORA-00979: must appear in the GROUP BY clause or be used in an aggregate function
+```
+
+`GROUP BY GROUPING SETS( (region, category), () )`は、次の2つの`GROUP BY`を1回のスキャンでまとめて実行しているようなイメージで捉えると分かりやすくなります。
+
+```mermaid
+flowchart TD
+    A["GROUP BY GROUPING SETS
+    ( (region, category), () )"] --> B["① GROUP BY region, category
+    → region, categoryはグループ化キー"]
+    A --> C["② GROUP BY （キーなし）
+    → region, categoryはどちらも
+    グループ化キーに含まれない"]
+    B --> D["regionを生の列として
+    SELECTしても問題ない"]
+    C --> E["regionを生の列としてSELECTすると
+    ORA-00979
+    （集計されていない列だから）"]
+```
+
+②の`()`（空集合＝全体総計）というグループ化パターンでは、`region`も`category`もグループ化のキーに一切含まれていません。この状態で`SELECT`句に`region`のような集約関数で囲んでいない生の列を書くと、Oracleは「グループ化されていない列を、集約後の1行の中でどの値として表示すればよいか特定できない」と判断し、`ORA-00979`エラーを返します。これは`GROUP BY`句一般に共通する基本ルール（`SELECT`句の非集約列は必ず`GROUP BY`に含まれていなければならない）そのものであり、`GROUPING SETS`固有の特殊な挙動ではありません。
+
+一方、`ROLLUP(region, category)`や`CUBE(region, category)`でこの問題が起きないのは、これらが生成するすべての集計パターン（明細・小計・総計）において、Oracleが内部的に`region`・`category`のどちらの列も一貫して「集計対象の列」として扱う規則的な処理を行っているためです。`GROUPING SETS`は任意のパターンを自由に組み合わせられる分、パターンによって「その列がグループ化キーに含まれているかどうか」が変わりうる、という点が`ROLLUP`／`CUBE`との根本的な違いです。
+
+### つまずき③：MAXで包むとエラーは消えるが値が誤る
+回避策として、`MAX(region)`のように集約関数で包んでしまえばよい、と考え修正したのが例3です。`MAX(region)`と書けば、Oracleにとっては「集約関数の戻り値」という扱いになるため、グループ化キーに含まれているかどうかに関わらずSELECT句に書くことができ、`ORA-00979`は解消します。しかしこれは**構文エラーは解消しますが、結果が静かに誤る**という、最も危険なパターンです。
+
+```mermaid
+flowchart TD
+    A["() グループ（総計行）
+    には全6行が所属"] --> B["MAX(region)
+    → east/westのうち大きい方
+    → 'west'（本来はNULLにしたい）"]
+    A --> C["MAX(category)
+    → 3種類のうち最大
+    → 'grocery'（本来はNULLにしたい）"]
+    B --> D["❌ 総計行が
+    'west/grocery' という
+    実在しそうな組み合わせに
+    化けてしまう"]
+    C --> D
+```
+
+`()`（空集合＝全体総計）のグループには、テーブルの**全6行**が属することになります。`ROLLUP`や`CUBE`であれば、まとめられた次元は自動的にNULLになりますが、`MAX(region)`のように明示的に集約関数で包んでしまうと、そのグループに属する実際の行の値（`'east'`と`'west'`のうち文字列として大きい`'west'`、3カテゴリのうち最大の`'grocery'`）がそのまま計算されてしまいます。金額（`SUM`）自体は正しく`5500`になるため、一見それらしい1行に見えてしまうのが特に厄介な点です。
+
+### 正解：GROUPINGで判定してから値を選択
+例4が最終的な正解です。`MAX()`の結果をそのまま使うのではなく、`GROUPING()`関数で「その行がまとめられた行（総計行）かどうか」を先に判定し、判定結果に応じて表示する値を出し分けます。
+
+```sql
+CASE WHEN GROUPING(sales_data.region) = 1 THEN '全社'
+     ELSE MAX(sales_data.region) END
+```
+
+`GROUPING(sales_data.region) = 1`は「その行がregionという次元でまとめられた（＝総計行である）」ことを意味します。この判定が真の場合は`MAX`の結果を使わず`'全社'`固定文字列に差し替え、それ以外（＝明細行）では各グループに該当行が1件しかないため`MAX(region)`は元の値をそのまま返します。ORA-00979の回避に必要だった`MAX()`はそのまま活かしつつ、`GROUPING()`による判定を1枚かぶせることで、「値の由来（集約されたものか、本来のデータか）」を正しく区別できるようになります。
+
+3つの集計句と、SELECT句での列の扱いの違いを整理すると次のようになります。
+
+| 集計句 | 生成される集計パターン | SELECT句での列の扱い |
+| :--- | :--- | :--- |
+| `ROLLUP(A, B)` | 明細／Aの小計／総計（規則的な階層） | 列を直書き可能、まとめられた列は自動でNULL |
+| `CUBE(A, B)` | 明細／Aの小計／Bの小計／総計（全組み合わせ） | 列を直書き可能、まとめられた列は自動でNULL |
+| `GROUPING SETS(...)` | カッコで指定した組み合わせのみ | パターンによってはグループ化キーに含まれない列が生じるため、`MAX()`等で包む必要があり、`GROUPING()`と組み合わせないと値が誤る |
+
+`ROLLUP`と`CUBE`はいずれも「規則」に従って自動的にパターンを生成するのに対し、`GROUPING SETS`はその規則から外れた「明細＋総計のみ」「AとCの組み合わせのみ（Bは除く）」といった、非対称・不規則な要求にも対応できる汎用性が最大の特徴です。実際、`ROLLUP(A, B)`は`GROUPING SETS((A, B), (A), ())`と、`CUBE(A, B)`は`GROUPING SETS((A, B), (A), (B), ())`と書き換えることができ、`GROUPING SETS`はこの2つの上位互換（より自由度の高い書き方）だと理解しておくと整理しやすいです。その自由度の高さと引き換えに、今回のような列参照の制約・誤集計のリスクが発生することがある、という点も併せて覚えておくと実務で役立ちます。
+
+解答例の`ORDER BY GROUPING(sales_data.region), region, category`は、問題8-7でも使ったテクニックです。`GROUPING(region)`は明細行で`0`、総計行（regionがまとめられた行）で`1`を返すため、これを最優先のソートキーにすることで「明細が先、総計が最後」という順序を安定して実現できます。
+
+期待する結果を見ると、地域×カテゴリの6行の後に「全社 / 合計 / 5500」という1行だけが続いており、`east 合計`や`west 合計`、`electronics 合計`のような中間集計も、例3のような`west/grocery`への誤変換も含まれていません。これはまさに、経営企画部から依頼された「明細と全体総計だけ」という要件に忠実な形です。
+
+:::message
+### GROUPING SETSと重複行、GROUP_ID()による検出
+`GROUPING SETS`は任意の組み合わせを自由に列挙できる反面、指定の仕方によっては**同じ集計結果が複数回出力されてしまう**ことがあります。例えば`GROUPING SETS((region), (region, category), (region))`のように、うっかり同じ`(region)`を2回指定してしまうと、「地域ごとの小計」の行が重複して2回出力されます。
+
+このような重複はSQL自体はエラーにならず実行できてしまうため、集計結果をそのままレポートに使うと、金額が2倍にカウントされたグラフや表を作ってしまう危険があります。
+
+```mermaid
+flowchart LR
+    A["GROUPING SETS
+    ((region), (region, category), (region))"] --> B["regionの指定が2回重複"]
+    B --> C["❌ east合計の行が
+    2行出力されてしまう"]
+```
+
+こうした重複を検出するために用意されているのが`GROUP_ID()`関数です。同じグループ化パターンが複数回生成された場合、1回目の出現には`0`、2回目以降の重複には`1`以上の値が割り当てられます。
+
+```sql
+SELECT
+    MAX(region)   AS region,
+    MAX(category) AS category,
+    SUM(amount)   AS total_amount,
+    GROUP_ID()    AS grp_id
+FROM
+    sales_data
+GROUP BY
+    GROUPING SETS((region), (region, category), (region))
+```
+
+この`GRP_ID`列を使って`HAVING GROUP_ID() = 0`と絞り込めば、重複した集計行を除去できます。`GROUPING SETS`を手書きで組み立てる際、特に複数人でクエリを継ぎ足していくような場面では、意図せず同じ組み合わせを重複指定してしまうミスが起こりやすいので、`GROUP_ID()`の存在は頭の片隅に置いておくとよいと思います。
+:::
+
+`GROUPING SETS`は、今回のように「明細＋総計のみ」というシンプルな要求だけでなく、「地域別の小計は欲しいがカテゴリ別の小計は不要」「特定の2軸の組み合わせだけを見たい」といった、`ROLLUP`や`CUBE`では表現しきれない非対称な要件にこそ真価を発揮します。ただし今回見た通り、`MAX()`でエラーを消しただけで満足せず、`GROUPING()`で値の由来を正しく判定するところまでがワンセットである点は、特に注意しておきたいポイントです。
+
+## 参考リンク
+https://www.shift-the-oracle.com/sql/group-by-having.html
+
+---
+<br><br>
+
+# 【完全版】問題8-12：データのばらつきを測る（STDDEV / VARIANCE）
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+人事部から、部門別の給与制度を見直すための分析依頼がありました。
+「A部門」と「B部門」は、どちらも平均給与（`AVG`）だけを見るとほぼ同じ水準ですが、実際の給与の**散らばり方**には大きな違いがあるのではないか、という仮説を検証したいとのことです。
+なお、対象となるのは各部門に**現に所属している全従業員**であり、そこから抽出した一部の「標本（サンプル）」ではなく、それ自体が分析対象の**母集団**である点に注意してください。
+
+再現性のため、以下の`WITH`句で部門別の給与データを用意します。
+
+```sql
+WITH dept_salaries AS (
+    SELECT 'A部門' AS dept_name, 2800 AS salary FROM dual UNION ALL
+    SELECT 'A部門', 2900 FROM dual UNION ALL
+    SELECT 'A部門', 3000 FROM dual UNION ALL
+    SELECT 'A部門', 3100 FROM dual UNION ALL
+    SELECT 'A部門', 3200 FROM dual UNION ALL
+    SELECT 'B部門', 1000 FROM dual UNION ALL
+    SELECT 'B部門', 2000 FROM dual UNION ALL
+    SELECT 'B部門', 3000 FROM dual UNION ALL
+    SELECT 'B部門', 4000 FROM dual UNION ALL
+    SELECT 'B部門', 5000 FROM dual
+)
+SELECT * FROM dept_salaries
+```
+
+**【取得項目】**
+1. **DEPT_NAME**：部門名
+2. **AVG_SALARY**：給与の平均値（小数点第2位まで四捨五入）
+3. **STDDEV_SALARY**：給与の**母標準偏差**（小数点第2位まで四捨五入）
+4. **VARIANCE_SALARY**：給与の**母分散**（小数点第2位まで四捨五入）
+
+**【条件】**
+* 部門ごとにグループ化すること。
+* 結果は`DEPT_NAME`の昇順で表示すること。
+
+## 期待する結果
+| DEPT_NAME | AVG_SALARY | STDDEV_SALARY | VARIANCE_SALARY | 
+| --------- | ---------- | ------------- | --------------- | 
+| A部門     | 3000       | 141.42        | 20000           | 
+| B部門     | 3000       | 1414.21       | 2000000         | 
+
+## 解答例
+```sql:例1：NG例（デフォルトのSTDDEV／VARIANCEを使うと母集団の値と一致しない）
+WITH dept_salaries AS (
+    SELECT 'A部門' AS dept_name, 2800 AS salary FROM dual UNION ALL
+    SELECT 'A部門', 2900 FROM dual UNION ALL
+    SELECT 'A部門', 3000 FROM dual UNION ALL
+    SELECT 'A部門', 3100 FROM dual UNION ALL
+    SELECT 'A部門', 3200 FROM dual UNION ALL
+    SELECT 'B部門', 1000 FROM dual UNION ALL
+    SELECT 'B部門', 2000 FROM dual UNION ALL
+    SELECT 'B部門', 3000 FROM dual UNION ALL
+    SELECT 'B部門', 4000 FROM dual UNION ALL
+    SELECT 'B部門', 5000 FROM dual
+)
+SELECT
+    dept_name,
+    ROUND(AVG(salary), 2)      AS avg_salary,
+    ROUND(STDDEV(salary), 2)   AS stddev_salary,   -- 標本標準偏差（n-1で割る）
+    ROUND(VARIANCE(salary), 2) AS variance_salary  -- 標本分散（n-1で割る）
+FROM
+    dept_salaries
+GROUP BY
+    dept_name
+ORDER BY
+    dept_name
+```
+```sql:例2：正解（STDDEV_POP／VAR_POPで母集団の値を算出）
+WITH dept_salaries AS (
+    SELECT 'A部門' AS dept_name, 2800 AS salary FROM dual UNION ALL
+    SELECT 'A部門', 2900 FROM dual UNION ALL
+    SELECT 'A部門', 3000 FROM dual UNION ALL
+    SELECT 'A部門', 3100 FROM dual UNION ALL
+    SELECT 'A部門', 3200 FROM dual UNION ALL
+    SELECT 'B部門', 1000 FROM dual UNION ALL
+    SELECT 'B部門', 2000 FROM dual UNION ALL
+    SELECT 'B部門', 3000 FROM dual UNION ALL
+    SELECT 'B部門', 4000 FROM dual UNION ALL
+    SELECT 'B部門', 5000 FROM dual
+)
+SELECT
+    dept_name,
+    ROUND(AVG(salary), 2)        AS avg_salary,
+    ROUND(STDDEV_POP(salary), 2) AS stddev_salary,  -- 母標準偏差（nで割る）
+    ROUND(VAR_POP(salary), 2)    AS variance_salary -- 母分散（nで割る）
+FROM
+    dept_salaries
+GROUP BY
+    dept_name
+ORDER BY
+    dept_name
+```
+
+## 解説
+問題8-9では`MEDIAN`や`STATS_MODE`といった「代表値（データの中心はどこか）」を扱いました。今回はその対になる考え方として、「データの散らばり具合（バラつき）」を数値で表す`STDDEV`（標準偏差）と`VARIANCE`（分散）を扱います。
+
+まず全体像として、A部門・B部門ともに給与の平均は`3000`で完全に一致しています。しかし中身を見ると、A部門は`2800〜3200`という狭い範囲に給与が収まっているのに対し、B部門は`1000〜5000`と大きく開いています。平均だけを見ていると、この「実態としての差」は見えてきません。
+
+```mermaid
+flowchart LR
+    subgraph A部門["A部門（給与の散らばりが小さい）"]
+        A1["2800"] --- A2["2900"] --- A3["3000"] --- A4["3100"] --- A5["3200"]
+    end
+    subgraph B部門["B部門（給与の散らばりが大きい）"]
+        B1["1000"] --- B2["2000"] --- B3["3000"] --- B4["4000"] --- B5["5000"]
+    end
+    A部門 -->|"平均は同じ 3000"| AVG["AVG = 3000"]
+    B部門 --> AVG
+```
+
+`VARIANCE`（分散）は、各データが平均からどれだけ離れているか（偏差）を2乗して平均した値です。2乗しているのは、単純に偏差を平均すると正の偏差と負の偏差が打ち消し合って必ず0になってしまうためです。`STDDEV`（標準偏差）は、この分散の平方根を取ったもので、単位を元のデータ（今回であれば「円」）に戻す役割があります。分散のままだと単位が「円の2乗」になってしまい直感的に扱いづらいため、実務では標準偏差の方がよく使われます。
+
+さて、今回の最大の注意点は、例1（NG例）と例2（正解）の違いです。実行してもどちらもエラーにはならず、もっともらしい数値が返ってくるため、違いに気づかないまま採用してしまいやすい落とし穴です。
+
+| 関数 | 計算方法 | 意味 |
+| :--- | :--- | :--- |
+| `STDDEV` / `VARIANCE` | 偏差の2乗和を **`n - 1`** で割る | **標本**標準偏差・**標本**分散 |
+| `STDDEV_POP` / `VAR_POP` | 偏差の2乗和を **`n`** で割る | **母**標準偏差・**母**分散 |
+
+Oracleでは`STDDEV`と`VARIANCE`という「素直な名前」の関数が、実は**標本（サンプル）**を対象とした計算式（`n-1`で割る）になっており、`_POP`（Population＝母集団）が付いた方が、対象データそのものを母集団として扱う計算式（`n`で割る）になっています。今回のように「A部門・B部門に**現に所属する全従業員**」という、それ自体が分析対象の全てであるデータを扱う場合は、一部を抽出した標本ではなく母集団そのものなので、`STDDEV_POP`／`VAR_POP`を使うのが概念的に正しい選択です。
+
+```mermaid
+flowchart TD
+    A["対象データは何か？"] -->|"全体（母集団）
+    そのものである"| B["STDDEV_POP / VAR_POP
+    を使う（nで割る）"]
+    A -->|"全体から抽出した
+    一部の標本である"| C["STDDEV / VARIANCE
+    を使う（n-1で割る）"]
+```
+
+なぜ`n-1`で割る方式が存在するのかというと、統計学的に「標本から母集団のばらつきを推定する」場合、単純に`n`で割ると分散を過小評価してしまう傾向があるため、`n-1`で割ることで補正（不偏推定）する、という理論的な背景があります。しかし今回のように対象データがそもそも母集団の全件である場合は、この補正はむしろ余計であり、`STDDEV`（標本）をそのまま使うとA部門は`141.42`ではなく`158.11`、B部門は`1414.21`ではなく`1581.14`という、実際よりも大きめの値が算出されてしまいます。値そのものは実在しそうな数字であるため気づきにくいのですが、母集団と標本のどちらを扱っているかを取り違えると、こうした地味なズレが積み重なっていきます。
+
+期待する結果を見ると、A部門とB部門は平均給与こそ同じ`3000`ですが、`STDDEV_SALARY`はA部門の`141.42`に対しB部門は`1414.21`と、ちょうど10倍の開きがあります。これは、平均給与という1つの数字だけでは「B部門は給与のばらつきがA部門の10倍ある」という実態を見抜けないことを示しています。人事制度の見直しでは、「平均が同じだから公平」ではなく、「ばらつきが大きい部門では、一部の従業員だけ突出して高い（または低い）給与になっている可能性がある」という視点が必要になり、`STDDEV`／`VARIANCE`はその第一歩となる指標です。
+
+:::message
+### NULLの扱いと、データが1件しかない場合の挙動
+`STDDEV`／`VARIANCE`系の関数も、他の集計関数と同様にNULLを計算対象から自動的に除外します。
+
+もう一点、実務で意外とハマりやすいのが「グループの中にデータが1件しかない場合」の挙動です。
+
+| 関数 | 対象データが1件の場合の結果 |
+| :--- | :--- |
+| `STDDEV` / `VARIANCE`（標本、`n-1`で割る） | **NULL**（`n-1=0`となり、ゼロ除算のためNULLが返る） |
+| `STDDEV_POP` / `VAR_POP`（母集団、`n`で割る） | **0**（`n=1`で割れるため、「ばらつきなし」として0が返る） |
+
+例えば、ある部門に従業員が1人しかいない場合、`STDDEV(salary)`は計算不能としてNULLを返しますが、`STDDEV_POP(salary)`はエラーにもNULLにもならず`0`を返します。部門ごとの一覧レポートを作成した際、一部の行だけ`STDDEV`列が空欄になっていたら、それは「エラー」ではなく「その部門の従業員が1人しかいない」というデータ上の事実を示している可能性が高い、と読み解けるようにしておくとよいと思います。
+:::
+
+`VARIANCE`と`STDDEV`は`STDDEV = SQRT(VARIANCE)`という関係にあるため、どちらか一方だけを表示すれば十分な場面も多いですが、今回のように両方を並べておくと、「分散という中間値からどう標準偏差が導かれるか」を確認しやすくなります。問題8-9の`MEDIAN`／`STATS_MODE`（代表値）と、今回の`STDDEV`／`VARIANCE`（散らばり）を組み合わせれば、「データの中心はどこか」「データはどれくらい散らばっているか」という、統計分析の基本となる2つの軸を押さえられるようになります。

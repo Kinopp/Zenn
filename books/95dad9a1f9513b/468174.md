@@ -1,5 +1,5 @@
 ---
-title: "第11章 集合演算子（全3問）"
+title: "第11章 集合演算子（全5問）"
 free: false
 ---
 
@@ -461,3 +461,262 @@ flowchart LR
 
 長らくOracleでは`MINUS`という独自キーワードが使われてきましたが、23aiからは標準SQLである`EXCEPT`も使えるようになりました。他のデータベース（PostgreSQLやSQL Serverなど）からの移行がよりスムーズになっています。
 ![](https://static.zenn.studio/user-upload/45cac6b3fc4b-20260504.png)
+
+---
+<br><br>
+
+# 問題11-4：集合演算子の優先順位の誤解（Oracleに"INTERSECT優先"はない）
+### 難易度：★★★☆☆ (Lv.3)
+## 問題
+マーケティング部門から、次のような依頼がありました。
+
+> 「2020年キャンペーンに応募した顧客」は**無条件で全員**DM対象に含めてほしい。**それに加えて**、「VIPクラブ会員」かつ「メール配信オプトイン同意者」の両方を満たす顧客も、追加でDM対象に含めてほしい。
+
+各グループの会員IDは以下の通りです（架空のキャンペーンデータのため`WITH`句で直接指定します）。
+
+* **A：2020年キャンペーン応募者（無条件で全員含める）**：`6555`, `19010`, `24556`
+* **B：VIPクラブ会員**：`33555`, `1556`
+* **C：メール配信オプトイン顧客**：`19010`, `33555`, `2830`
+
+**【抽出・編集ルール】**
+* 依頼内容：「Aは全員含める。加えて、B かつ C の両方に該当する人も含める」＝ `A ∪ (B ∩ C)`
+* `SH.CUSTOMERS`と結合し、`CUST_ID`、`NAME`（姓名結合）、`CUST_CITY`を表示してください。
+* `CUST_ID`の昇順で表示してください。
+
+## 期待する結果
+| CUST_ID | NAME             | CUST_CITY |
+| ------- | ---------------- | --------- |
+| 6555    | Rosanna Rill     | Yokohama  |
+| 19010   | Roxanne Crocker  | Yokohama  |
+| 24556   | Zylia Hanson     | Yokohama  |
+| 33555   | Bud Smyth        | Yokohama  |
+
+## 解答例
+```sql:NG例：括弧なし（「INTERSECTが優先されるはず」という思い込み）
+WITH campaign_2020 AS (
+    SELECT 6555 AS cust_id FROM dual UNION ALL
+    SELECT 19010 FROM dual UNION ALL
+    SELECT 24556 FROM dual
+), vip_club AS (
+    SELECT 33555 AS cust_id FROM dual UNION ALL
+    SELECT 1556 FROM dual
+), opt_in AS (
+    SELECT 19010 AS cust_id FROM dual UNION ALL
+    SELECT 33555 FROM dual UNION ALL
+    SELECT 2830 FROM dual
+)
+SELECT cust_id FROM campaign_2020
+UNION ALL
+SELECT cust_id FROM vip_club
+INTERSECT
+SELECT cust_id FROM opt_in
+```
+```sql:例1：括弧で評価順序を明示（正解）
+WITH campaign_2020 AS (
+    SELECT 6555 AS cust_id FROM dual UNION ALL
+    SELECT 19010 FROM dual UNION ALL
+    SELECT 24556 FROM dual
+), vip_club AS (
+    SELECT 33555 AS cust_id FROM dual UNION ALL
+    SELECT 1556 FROM dual
+), opt_in AS (
+    SELECT 19010 AS cust_id FROM dual UNION ALL
+    SELECT 33555 FROM dual UNION ALL
+    SELECT 2830 FROM dual
+), dm_target AS (
+    SELECT cust_id FROM campaign_2020
+    UNION ALL
+    SELECT cust_id FROM (
+        SELECT cust_id FROM vip_club
+        INTERSECT
+        SELECT cust_id FROM opt_in
+    )
+)
+SELECT
+    c.cust_id,
+    c.cust_first_name || ' ' || c.cust_last_name AS "NAME",
+    c.cust_city
+FROM
+    dm_target dt
+    INNER JOIN sh.customers c 
+       ON dt.cust_id = c.cust_id
+ORDER BY
+    c.cust_id
+```
+
+## 解説
+第11章の最後を飾るのは、`UNION`・`INTERSECT`・`MINUS`を組み合わせたときに生まれる、**「他のDB製品との思い込みによる罠」**です。SQL標準（ANSI/ISO）や、Snowflake・Exasolなど一部の製品では、`INTERSECT`が`UNION`・`MINUS`より**先に評価される**という優先順位ルールがあります。他のDB製品での経験が長いエンジニアほど、「`INTERSECT`は先に評価されるはず」と信じ込んでSQLを書いてしまいがちです。
+
+しかし、**Oracleではこのルールは採用されていません**。Oracle公式マニュアルには次のように明記されています。
+
+> All set operators have equal precedence. If a SQL statement contains multiple set operators, then Oracle Database evaluates them from the left to right unless parentheses explicitly specify another order.
+> （すべての集合演算子は同じ優先順位を持つ。複数の集合演算子を含む場合、括弧で明示されない限り、Oracleは左から右へ評価する）
+
+```mermaid
+flowchart TB
+    A["campaign_2020 UNION ALL vip_club INTERSECT opt_in"] --> B{"他DB／SQL標準の経験者の思い込み
+    （INTERSECTが先に評価される）"}
+    A --> C{"Oracleの実際の評価順序
+    （全演算子が同列、左から右）"}
+    B --> B1["A ∪ (B ∩ C)
+    ← 依頼者が意図した動作"]
+    C --> C1["(A ∪ B) ∩ C
+    ← Oracleが実際に行う動作"]
+```
+
+NG例のクエリでは、「Aは無条件で全員含め、そこにB∩Cの結果を追加する」つもりで、`campaign_2020 UNION ALL vip_club INTERSECT opt_in`と括弧なしで書きました。構文エラーは出ません。しかしOracleは左から右への評価ルールに従い、これを`(campaign_2020 UNION ALL vip_club) INTERSECT opt_in`として実行します。
+
+結果、`campaign_2020`（無条件で全員含めたかったはずの`6555`, `19010`, `24556`）のうち、オプトインに同意していない`6555`と`24556`が**勝手にDM対象から除外**されてしまいます。依頼者の意図は「キャンペーン応募者は無条件で全員」だったにもかかわらず、です。件数だけ見ると2件という自然な数値が返ってくるため、この抜け漏れには非常に気づきにくいという特徴があります。
+
+正解例では、`(vip_club INTERSECT opt_in)`を明示的に括弧でくくることで、「B∩Cを先に計算し、その結果をAに追加する」という意図をOracleに正しく伝えています。
+
+| 項目 | ANSI SQL標準 / Snowflake / Exasol等 | Oracle |
+| :--- | :--- | :--- |
+| `INTERSECT`の優先順位 | 他の演算子より高い | **他の演算子と同列（優先順位の差なし）** |
+| 複数の集合演算子の評価順 | `INTERSECT`が先、他は左から右 | **常に左から右**（括弧がない限り） |
+
+なお、Oracleの古いマニュアル（8i時代）には「将来のリリースでANSI標準に合わせてINTERSECTの優先順位を上げる可能性がある」という記載が存在しますが、現行バージョンに至るまでこの変更は実施されていません。過去の情報や他DBでの経験を根拠に振る舞いを推測するのではなく、**必ず現行のOracle公式マニュアルで挙動を確認する**姿勢が重要です。
+
+:::message
+複数のSELECT文を`UNION`系・`MINUS`・`INTERSECT`で3つ以上つなげる場合は、優先順位に頼らず**必ず括弧で意図を明示する**習慣をつけましょう。特に他のDB製品の経験があるエンジニアほど、「`INTERSECT`が優先されるはず」という思い込みでOracleのバグを踏みやすい点に注意が必要です。
+:::
+
+## 参考リンク
+https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/The-UNION-ALL-INTERSECT-MINUS-Operators.html
+
+---
+<br><br>
+
+# 問題11-5：MINUSとNOT INの違い（NULLの落とし穴）
+### 難易度：★★☆☆☆ (Lv.2)
+## 問題
+DM配信システムから、次のような依頼がありました。
+
+> キャンペーン候補者リストから、「配信停止希望者リスト」に載っている顧客を除外して、最終的なDM送付対象リストを作ってほしい。なお配信停止希望者リストは他システムからの連携データのため、まれに原因不明のデータ不備（`CUST_ID`が空）が混ざることがある。
+
+各リストの内容は以下の通りです（架空データのため`WITH`句で直接指定します）。
+
+* **候補者リスト**：`6555`, `19010`, `24556`, `33555`
+* **配信停止希望者リスト**：`19010`, `NULL`（原因不明のデータ不備により1件`CUST_ID`が取得できていない）
+
+**【抽出・編集ルール】**
+* 候補者リストから、配信停止希望者リストに含まれる顧客（`19010`）だけを正しく除外してください。
+* `SH.CUSTOMERS`と結合し、`CUST_ID`、`NAME`（姓名結合）、`CUST_CITY`を表示してください。
+* `CUST_ID`の昇順で表示してください。
+
+## 期待する結果
+| CUST_ID | NAME          | CUST_CITY |
+| ------- | ------------- | --------- |
+| 6555    | Rosanna Rill  | Yokohama  |
+| 24556   | Zylia Hanson  | Yokohama  |
+| 33555   | Bud Smyth     | Yokohama  |
+
+## 解答例
+```sql:NG例：NOT INを使用（NULLの罠）
+WITH candidates AS (
+    SELECT 6555 AS cust_id FROM dual UNION ALL
+    SELECT 19010 FROM dual UNION ALL
+    SELECT 24556 FROM dual UNION ALL
+    SELECT 33555 FROM dual
+), opt_out AS (
+    SELECT 19010 AS cust_id FROM dual UNION ALL
+    SELECT TO_NUMBER(NULL) FROM dual  -- 原因不明のデータ不備でNULLが混入
+)
+SELECT
+    c.cust_id,
+    c.cust_first_name || ' ' || c.cust_last_name AS "NAME",
+    c.cust_city
+FROM
+    sh.customers c
+WHERE
+    c.cust_id IN (SELECT cust_id FROM candidates)
+    AND c.cust_id NOT IN (SELECT cust_id FROM opt_out)
+ORDER BY
+    c.cust_id
+```
+```sql:例1：MINUSを使用（正解）
+WITH candidates AS (
+    SELECT 6555 AS cust_id FROM dual UNION ALL
+    SELECT 19010 FROM dual UNION ALL
+    SELECT 24556 FROM dual UNION ALL
+    SELECT 33555 FROM dual
+), opt_out AS (
+    SELECT 19010 AS cust_id FROM dual UNION ALL
+    SELECT TO_NUMBER(NULL) FROM dual  -- 原因不明のデータ不備でNULLが混入
+), dm_target AS (
+    SELECT cust_id FROM candidates
+    MINUS
+    SELECT cust_id FROM opt_out
+)
+SELECT
+    c.cust_id,
+    c.cust_first_name || ' ' || c.cust_last_name AS "NAME",
+    c.cust_city
+FROM
+    dm_target dt
+    INNER JOIN sh.customers c 
+       ON dt.cust_id = c.cust_id
+ORDER BY
+    c.cust_id
+```
+```sql:例2：NOT EXISTSを使用（正解・別解）
+WITH candidates AS (
+    SELECT 6555 AS cust_id FROM dual UNION ALL
+    SELECT 19010 FROM dual UNION ALL
+    SELECT 24556 FROM dual UNION ALL
+    SELECT 33555 FROM dual
+), opt_out AS (
+    SELECT 19010 AS cust_id FROM dual UNION ALL
+    SELECT TO_NUMBER(NULL) FROM dual  -- 原因不明のデータ不備でNULLが混入
+)
+SELECT
+    c.cust_id,
+    c.cust_first_name || ' ' || c.cust_last_name AS "NAME",
+    c.cust_city
+FROM
+    sh.customers c
+WHERE
+    c.cust_id IN (SELECT cust_id FROM candidates)
+    AND NOT EXISTS (
+        SELECT 'X' FROM opt_out o WHERE o.cust_id = c.cust_id
+    )
+ORDER BY
+    c.cust_id
+```
+
+## 解説
+`MINUS`（差集合）と、`WHERE`句の`NOT IN`は、どちらも「Aから、Bに含まれるものを除外する」という同じ目的で使われることが多いテクニックです。しかし、**除外リスト側の列にNULLが1件でも紛れ込んでいると、この2つは全く異なる挙動をします**。これはOracleに限らず標準SQL共通の仕様ですが、実務での遭遇率が高く、気づきにくいため、集合演算子の章の締めくくりとして扱っておきたい内容です。
+
+NG例のクエリを実行すると、**候補者リストが4件あるにもかかわらず、結果が0件**になってしまいます。原因は`opt_out`テーブルに含まれる1件の`NULL`です。
+
+```mermaid
+flowchart TB
+    A["c.cust_id NOT IN (19010, NULL)"] --> B["6555 NOT IN (19010, NULL) を分解すると"]
+    B --> C["6555 <> 19010 → TRUE"]
+    B --> D["6555 <> NULL → UNKNOWN"]
+    C --> E["TRUE AND UNKNOWN"]
+    D --> E
+    E --> F["= UNKNOWN
+    （TRUEではないのでWHERE条件から除外される）"]
+```
+
+SQLの`NOT IN (v1, v2, ..., vn)`は、内部的には`<> v1 AND <> v2 AND ... AND <> vn`という**AND条件の連続**として評価されます。ここで比較対象にNULLが含まれると、`何か <> NULL`は`TRUE`にも`FALSE`にもならず、**`UNKNOWN`（3値論理の第3の値）** になります。
+
+`AND`演算では、`TRUE AND UNKNOWN`は`UNKNOWN`になります。`WHERE`句は`TRUE`と評価された行しか残さないため、`UNKNOWN`と評価された行はすべて除外されてしまいます。つまり、除外リストに**1件でもNULLが含まれていると、`NOT IN`はどの候補者に対しても`UNKNOWN`を返し、結果的に全件が消えてしまう**のです。これは構文エラーにならないため、「候補者が誰もいなかった」という、業務的にもっともらしい（しかし誤った）結果として現れてしまいます。
+
+一方、`MINUS`（例1）はこの罠にかかりません。`MINUS`は行単位の集合比較であり、`opt_out`側のNULLの行は、`candidates`側にNULLの行が存在しない限り、どの行とも一致しません。そのため、`19010`だけが正しく除外され、他の3件はそのまま残ります。`NOT EXISTS`（例2）も同様に、相関サブクエリで行の存在を1件ずつ判定する仕組みのため、NULLに引きずられることなく正しく動作します。
+
+| 方式 | NULLを含む除外リストへの耐性 | 挙動 |
+| :--- | :--- | :--- |
+| `NOT IN`（NG例） | ✕ 弱い | 除外リストに1件でもNULLがあると、結果が全件消える |
+| `MINUS`（例1） | ○ 強い | NULLの行は無関係な行に影響しない。正しく除外できる |
+| `NOT EXISTS`（例2） | ○ 強い | 相関サブクエリでNULLを暗黙的に無視するため安全 |
+
+なお、この問題は第9章（副問い合わせ）で扱った`EXISTS`／`NOT EXISTS`とはやや異なる切り口です。第9章では主に「関係除算（リレーショナルディビジョン）」のロジックとしてこれらを扱いましたが、本問はあくまで **「除外リストにNULLが混入した場合の安全性」**という観点にフォーカスしています。`NOT IN`を使う際は、サブクエリの結果に**絶対にNULLが含まれないことを保証できるか**を必ず確認する必要があります。保証できない場合は、`MINUS`か`NOT EXISTS`、あるいは`WHERE cust_id NOT IN (SELECT cust_id FROM opt_out WHERE cust_id IS NOT NULL)`のように明示的にNULLを除外するかたちで書く必要があります。
+
+:::message
+`NOT IN`のサブクエリに渡す列は、**NULLが絶対に含まれないことが保証されている列**（多くの場合は主キーやNOT NULL制約付きの列）に限定するのが安全な実務ルールです。外部システム連携データなど、NULL混入のリスクがある場合は、`MINUS`または`NOT EXISTS`を使うか、サブクエリ側で`IS NOT NULL`を明示的に付与しましょう。
+:::
+
+## 参考リンク
+https://www.shift-the-oracle.com/sql/minus-operator.html

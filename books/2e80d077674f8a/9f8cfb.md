@@ -1,5 +1,5 @@
 ---
-title: "第14章 階層構造の取り扱い②（全4問）"
+title: "第14章 階層構造の取り扱い②（全7問）"
 free: false
 ---
 
@@ -749,8 +749,522 @@ CONNECT BY
 
 このテクニックは、今回の決裁権限の一括判定以外にも、「あるプロジェクトのリーダー（起点）を、そのプロジェクトに参加する全メンバーの行に一括表示する」プロジェクト管理システムの担当者表示、「各フランチャイズ本部（起点）を、そのグループに属する全店舗の行に一括表示する」フランチャイズ店舗管理システムなど、「起点の情報を配下全体にコピーしたい」場面全般で活用できます。
 
+---
+<br><br>
 
 
+# 【完全版】問題14-12：入れ子集合モデル（Nested Sets Model）によるサブツリー抽出
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+これまでの14-1〜14-11では、Oracle独自の`CONNECT BY`（隣接リストモデル）や再帰CTEを使って階層構造を扱ってきました。しかし木構造の実装方法はこれだけではありません。
 
+「入れ子集合モデル（Nested Sets Model）」は、各ノードに`lft`（左値）・`rgt`（右値）という2つの数値をあらかじめ採番しておくことで、**再帰処理を一切使わずに`BETWEEN`だけでサブツリー全体を一発抽出**できる設計手法です。`lft`・`rgt`は、木を深さ優先で辿ったときに各ノードを「行きがけ」と「帰りがけ」の2回通過する順序を採番したもので、あるノードの子孫はすべて、そのノードの`lft`と`rgt`の間に値を持つという性質を利用します。
 
+以下は、ある小規模な開発組織を「あらかじめ`lft`/`rgt`を採番済み」の状態でモデル化したデータです。
 
+```sql
+WITH org_nested_sets (node_id, node_name, lft, rgt) AS (
+    SELECT 1, 'A. CEO 佐藤',              1,  18 FROM DUAL UNION ALL
+    SELECT 2, 'B. VP営業 鈴木',           2,   7 FROM DUAL UNION ALL
+    SELECT 3, 'C. VP開発 田中',           8,  17 FROM DUAL UNION ALL
+    SELECT 4, 'D. 営業マネージャー1 高橋', 3,   4 FROM DUAL UNION ALL
+    SELECT 5, 'E. 営業マネージャー2 伊藤', 5,   6 FROM DUAL UNION ALL
+    SELECT 6, 'F. 開発マネージャー1 渡辺', 9,  14 FROM DUAL UNION ALL
+    SELECT 7, 'G. 開発マネージャー2 山本', 15, 16 FROM DUAL UNION ALL
+    SELECT 8, 'H. 開発者1 中村',          10, 11 FROM DUAL UNION ALL
+    SELECT 9, 'I. 開発者2 小林',          12, 13 FROM DUAL
+)
+```
+
+上記の`org_nested_sets`をデータソースとして参照し、**「VP開発 田中」（C）を根とするサブツリー全体**（C自身とその配下全員）を抽出してください。
+
+**【抽出・編集ルール】**
+1. `BETWEEN`（または相当の範囲比較）のみを用い、再帰CTEや`CONNECT BY`は使用しないこと。
+2. **INDENTED_NAME**：Cを深さ1とした相対階層に応じて、ノード名の前に「-」を2つずつインデントとして付与すること。
+3. **DEPTH**：Cを1とした相対的な深さ。
+4. `lft`の昇順（＝深さ優先探索の訪問順）に並べること。
+
+## 期待する結果
+| INDENTED_NAME               | DEPTH | 
+| ----------------------------- | ------- | 
+| C. VP開発 田中              | 1       | 
+| --F. 開発マネージャー1 渡辺 | 2       | 
+| ----H. 開発者1 中村         | 3       | 
+| ----I. 開発者2 小林         | 3       | 
+| --G. 開発マネージャー2 山本 | 2       | 
+
+## NG例
+```sql
+-- 「Cの配下 = rgtがCのrgt以下のノード」と勘違いした誤りの例
+WITH org_nested_sets (node_id, node_name, lft, rgt) AS (
+    SELECT 1, 'A. CEO 佐藤',              1,  18 FROM DUAL UNION ALL
+    SELECT 2, 'B. VP営業 鈴木',           2,   7 FROM DUAL UNION ALL
+    SELECT 3, 'C. VP開発 田中',           8,  17 FROM DUAL UNION ALL
+    SELECT 4, 'D. 営業マネージャー1 高橋', 3,   4 FROM DUAL UNION ALL
+    SELECT 5, 'E. 営業マネージャー2 伊藤', 5,   6 FROM DUAL UNION ALL
+    SELECT 6, 'F. 開発マネージャー1 渡辺', 9,  14 FROM DUAL UNION ALL
+    SELECT 7, 'G. 開発マネージャー2 山本', 15, 16 FROM DUAL UNION ALL
+    SELECT 8, 'H. 開発者1 中村',          10, 11 FROM DUAL UNION ALL
+    SELECT 9, 'I. 開発者2 小林',          12, 13 FROM DUAL
+)
+SELECT node_name, lft, rgt
+FROM org_nested_sets
+WHERE rgt <= (SELECT rgt FROM org_nested_sets WHERE node_name LIKE 'C.%')
+ORDER BY lft
+```
+**【診断】** このクエリはエラーにならず実行できてしまいますが、結果には**「B. VP営業 鈴木」「D. 営業マネージャー1 高橋」「E. 営業マネージャー2 伊藤」という、Cとは全く無関係な営業チームのメンバー**まで紛れ込みます。`rgt <= 17`という条件は「B（rgt=7）」「D（rgt=4）」「E（rgt=6）」もすべて満たしてしまうためです。サブツリー判定には`lft >= 親のlft`という**下限条件も同時に**必要であり、どちらか一方だけでは正しく絞り込めません。
+
+## 解答例
+```sql
+WITH org_nested_sets (node_id, node_name, lft, rgt) AS (
+    SELECT 1, 'A. CEO 佐藤',              1,  18 FROM DUAL UNION ALL
+    SELECT 2, 'B. VP営業 鈴木',           2,   7 FROM DUAL UNION ALL
+    SELECT 3, 'C. VP開発 田中',           8,  17 FROM DUAL UNION ALL
+    SELECT 4, 'D. 営業マネージャー1 高橋', 3,   4 FROM DUAL UNION ALL
+    SELECT 5, 'E. 営業マネージャー2 伊藤', 5,   6 FROM DUAL UNION ALL
+    SELECT 6, 'F. 開発マネージャー1 渡辺', 9,  14 FROM DUAL UNION ALL
+    SELECT 7, 'G. 開発マネージャー2 山本', 15, 16 FROM DUAL UNION ALL
+    SELECT 8, 'H. 開発者1 中村',          10, 11 FROM DUAL UNION ALL
+    SELECT 9, 'I. 開発者2 小林',          12, 13 FROM DUAL
+),
+root AS (
+    -- 根（C）のlft/rgtを取得
+    SELECT lft AS root_lft, rgt AS root_rgt
+    FROM org_nested_sets
+    WHERE node_name LIKE 'C.%'
+),
+subtree AS (
+    -- Cのlft～rgtの範囲内に完全に収まるノード＝Cとその配下全員
+    SELECT o.node_name, o.lft, o.rgt
+    FROM org_nested_sets o, root r
+    WHERE o.lft >= r.root_lft
+      AND o.rgt <= r.root_rgt
+)
+SELECT
+    LPAD('-', 2 * (depth - 1), '-') || node_name AS indented_name,
+    depth
+FROM (
+    SELECT
+        s.node_name,
+        s.lft,
+        -- 自分を包含する（lft以下・rgt以上を持つ）subtree内ノードの数＝相対的な深さ
+        (
+            SELECT COUNT(*)
+            FROM subtree anc
+            WHERE anc.lft <= s.lft
+              AND anc.rgt >= s.rgt
+        ) AS depth
+    FROM subtree s
+)
+ORDER BY lft
+```
+## 解説
+今回から数問にわたり、『プログラマのためのSQLグラフ原論』（ミック著）で紹介されている、隣接リストモデル以外の木構造の実装パターンを扱っていきます。第1弾は「入れ子集合モデル（Nested Sets Model）」です。
+
+これまでの`CONNECT BY`や再帰CTEは「親IDを辿る」という発想でしたが、入れ子集合モデルはまったく異なる発想に立ちます。木を深さ優先で一筆書きするように辿り、各ノードを「入るとき」と「出るとき」の2回カウントし、その通過順序の番号を`lft`（左値）・`rgt`（右値）としてノードに刻印しておくのです。
+
+```mermaid
+flowchart TD
+    A["A. CEO
+    lft=1, rgt=18"] --> B["B. VP営業
+    lft=2, rgt=7"]
+    A --> C["C. VP開発
+    lft=8, rgt=17"]
+    B --> D["D. 営業Mgr1
+    lft=3, rgt=4"]
+    B --> E["E. 営業Mgr2
+    lft=5, rgt=6"]
+    C --> F["F. 開発Mgr1
+    lft=9, rgt=14"]
+    C --> G["G. 開発Mgr2
+    lft=15, rgt=16"]
+    F --> H["H. 開発者1
+    lft=10, rgt=11"]
+    F --> I["I. 開発者2
+    lft=12, rgt=13"]
+```
+
+この採番方式の最大の性質は、**「あるノードの子孫は、必ずそのノードの`lft`と`rgt`の間に自分の`lft`・`rgt`を持つ」**という点です。図の「C（lft=8, rgt=17）」を見てください。配下の「F（9,14）」「G（15,16）」「H（10,11）」「I（12,13）」は、すべての`lft`・`rgt`が8〜17の範囲にすっぽり収まっています。一方、無関係な「B（2,7）」やその配下は、この範囲の外側にあります。
+
+だからこそ解答例では、`root`でCの`lft`・`rgt`を取得したうえで、
+```sql
+WHERE o.lft >= r.root_lft AND o.rgt <= r.root_rgt
+```
+という**範囲の両端を同時に絞り込む**`BETWEEN`相当の条件だけで、再帰もループも使わずにサブツリー全体を一発抽出しています。`CONNECT BY`や再帰CTEが「木を上から辿りながら都度絞り込む」処理であるのに対し、入れ子集合モデルは「あらかじめ数値に木構造を埋め込んでおくことで、単純な範囲検索に変換してしまう」のが最大の特徴です。
+
+NG例で示したとおり、この絞り込みには`lft`（下限）・`rgt`（上限）の**両方**が必要です。`rgt <= 17`だけで判定すると、Cとは無関係な「B（rgt=7）」「D（rgt=4）」「E（rgt=6）」まで条件を満たしてしまい、エラーにはならないまま誤ったサブツリーが返ります。これは典型的な「サイレントな誤り」で、テストデータの件数が少ないと気づきにくい落とし穴です。
+
+`DEPTH`（相対的な深さ）の算出も入れ子集合モデルならではの発想です。
+```sql
+(SELECT COUNT(*) FROM subtree anc WHERE anc.lft <= s.lft AND anc.rgt >= s.rgt)
+```
+これは「自分を`lft`・`rgt`の範囲で包含しているノード（＝自分自身を含めた祖先）が何人いるか」を数えており、根であるC自身は1人（自分だけ）、Fは2人（C, F自身）、H・Iは3人（C, F, 自分自身）とカウントされます。`CONNECT BY`の`LEVEL`が「上から数えた深さ」だったのに対し、こちらは「自分を包含する範囲がいくつ入れ子になっているか」という、集合の包含関係から深さを導き出している点が対照的です。
+
+| 観点 | 隣接リストモデル（`CONNECT BY`） | 入れ子集合モデル（`lft`/`rgt`） |
+| :--- | :--- | :--- |
+| サブツリー抽出 | 再帰的な探索が必要 | `BETWEEN`だけで一発抽出（高速） |
+| ノードの追加・移動 | `manager_id`を1件書き換えるだけ | 挿入位置より右側の全ノードの`lft`/`rgt`を再採番（更新コストが高い） |
+| 直感的な理解しやすさ | 親IDを見ればよく直感的 | `lft`/`rgt`の意味を理解する必要がある |
+| 向いている場面 | 更新頻度が高い組織図・BOM | 読み取り（検索）中心で、更新頻度が低い分類階層・カテゴリマスタ |
+
+この比較からわかるとおり、入れ子集合モデルは「一度組み立てたら滅多に組み替えない木構造」、たとえばECサイトの商品カテゴリツリーや、CMSのメニュー階層のように**読み取り性能を最優先したい場面**で威力を発揮します。逆に人事異動が頻繁に起こる組織図のように**書き込みが多い場面**では、ノード1つを移動するたびに周辺の`lft`/`rgt`を大量に再計算する必要があり、`CONNECT BY`（隣接リストモデル）の方が実用的です。
+
+次回以降の問題では、同じ木構造をさらに異なる方式（経路列挙モデルの実データ保持、推移閉包テーブル、DAG）で表現し、それぞれのモデルがどんな場面に向いているかを比較していくことになります。
+
+## 参考リンク
+https://docs.oracle.com/cd/F19136_01/sqlrf/Hierarchical-Query-Operators.html
+
+---
+<br><br>
+
+# 【完全版】問題14-13：経路列挙モデル（Path Enumeration Model）── 動的生成 vs 実列保持
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+問題14-3では、`EMPLOYEES`テーブルに対して再帰CTEを使い、`hierarchy_path`という経路文字列を**クエリ実行のたびにその場で組み立てて**いました。しかし実務では、「経路文字列をあらかじめ実列（マテリアライズドカラム）としてテーブルに持たせておく」という設計もよく採用されます。これが「経路列挙モデル（Path Enumeration Model）」の本来の姿です。
+
+以下は、ECサイトの商品カテゴリマスタを、**あらかじめ`MAT_PATH`列に経路文字列を格納済み**の状態でモデル化したデータです。`MAT_PATH`は、ルートから自分自身までの`CATEGORY_ID`を`/`で連結し、前後にも`/`を付与した文字列です（例：`/1/5/6/`）。
+
+```sql
+WITH category_master (category_id, parent_id, category_name, mat_path) AS (
+    SELECT 1, NULL, '家電',            '/1/'       FROM DUAL UNION ALL
+    SELECT 2, 1,    'パソコン',         '/1/2/'     FROM DUAL UNION ALL
+    SELECT 3, 2,    'ノートPC',         '/1/2/3/'   FROM DUAL UNION ALL
+    SELECT 4, 2,    'デスクトップPC',   '/1/2/4/'   FROM DUAL UNION ALL
+    SELECT 5, 1,    '周辺機器',         '/1/5/'     FROM DUAL UNION ALL
+    SELECT 6, 5,    'マウス',           '/1/5/6/'   FROM DUAL UNION ALL
+    SELECT 7, 5,    'キーボード',       '/1/5/7/'   FROM DUAL UNION ALL
+    SELECT 8, 6,    'ゲーミングマウス', '/1/5/6/8/' FROM DUAL
+)
+```
+
+上記の`category_master`をデータソースとして、**再帰CTEや`CONNECT BY`を一切使わず**、`MAT_PATH`列に対する`LIKE`演算だけで以下を算出してください。
+
+**【抽出・編集ルール】**
+1. **INDENTED_NAME**：`MAT_PATH`内の`/`の数から算出した階層の深さに応じて、カテゴリ名の前に「-」を2つずつインデントとして付与すること。
+2. **BREADCRUMB**：ルートから自分自身までの経路を「カテゴリ名 > カテゴリ名 > ...」の形式で連結した、いわゆる「パンくずリスト」を表示すること。
+3. **DESCENDANT_COUNT**：自分自身を除いた、配下カテゴリ（間接的な子孫も含む）の件数。
+4. **並び順**：`MAT_PATH`の昇順で、深さ優先探索と同じ順序になるようにすること。
+
+## 期待する結果
+| INDENTED_NAME          | BREADCRUMB                                  | DESCENDANT_COUNT | 
+| ------------------------ | --------------------------------------------- | ------------------ | 
+| 家電                   | 家電                                        | 7                  | 
+| --パソコン             | 家電 > パソコン                             | 2                  | 
+| ----ノートPC           | 家電 > パソコン > ノートPC                  | 0                  | 
+| ----デスクトップPC     | 家電 > パソコン > デスクトップPC            | 0                  | 
+| --周辺機器             | 家電 > 周辺機器                             | 3                  | 
+| ----マウス             | 家電 > 周辺機器 > マウス                    | 1                  | 
+| ------ゲーミングマウス | 家電 > 周辺機器 > マウス > ゲーミングマウス | 0                  | 
+| ----キーボード         | 家電 > 周辺機器 > キーボード                | 0                  | 
+
+「ゲーミングマウス」（マウスの子）が「キーボード」より**前**に表示される点に注目してください。これは`MAT_PATH`の文字列としての昇順ソートが、そのまま深さ優先探索の順序と一致するためです。
+
+## NG例
+```sql
+-- 「自分自身」を子孫カウントから除外し忘れた誤りの例
+WITH category_master (category_id, parent_id, category_name, mat_path) AS (
+    SELECT 1, NULL, '家電',            '/1/'       FROM DUAL UNION ALL
+    SELECT 2, 1,    'パソコン',         '/1/2/'     FROM DUAL UNION ALL
+    SELECT 3, 2,    'ノートPC',         '/1/2/3/'   FROM DUAL UNION ALL
+    SELECT 4, 2,    'デスクトップPC',   '/1/2/4/'   FROM DUAL UNION ALL
+    SELECT 5, 1,    '周辺機器',         '/1/5/'     FROM DUAL UNION ALL
+    SELECT 6, 5,    'マウス',           '/1/5/6/'   FROM DUAL UNION ALL
+    SELECT 7, 5,    'キーボード',       '/1/5/7/'   FROM DUAL UNION ALL
+    SELECT 8, 6,    'ゲーミングマウス', '/1/5/6/8/' FROM DUAL
+)
+SELECT
+    m.category_name,
+    (
+        SELECT COUNT(*)
+        FROM category_master d
+        WHERE d.mat_path LIKE m.mat_path || '%'
+        -- ★ d.category_id != m.category_id の除外条件が抜けている
+    ) AS descendant_count
+FROM category_master m
+ORDER BY m.mat_path
+```
+**【診断】** このクエリはエラーにならず実行でき、しかも出力される数値（8, 3, 1, 1, 4, 2, 1, 1）は一見もっともらしく見えてしまいます。しかし正解と比べると**全カテゴリの件数が軒並み1件ずつ多くなっています**。原因は、`d.mat_path LIKE m.mat_path || '%'`という条件が「自分自身のパス」にも前方一致してしまう（自分の`MAT_PATH`は必ず自分の`MAT_PATH`で始まる）ため、末端カテゴリでも「配下0件」ではなく「配下1件（自分自身）」と誤ってカウントされてしまう点です。「値が壊れていない（マイナスやNULLにならない）ため、レビューで見逃されやすい」典型的なサイレントバグです。
+
+## 解答例
+```sql
+WITH category_master (category_id, parent_id, category_name, mat_path) AS (
+    SELECT 1, NULL, '家電',            '/1/'       FROM DUAL UNION ALL
+    SELECT 2, 1,    'パソコン',         '/1/2/'     FROM DUAL UNION ALL
+    SELECT 3, 2,    'ノートPC',         '/1/2/3/'   FROM DUAL UNION ALL
+    SELECT 4, 2,    'デスクトップPC',   '/1/2/4/'   FROM DUAL UNION ALL
+    SELECT 5, 1,    '周辺機器',         '/1/5/'     FROM DUAL UNION ALL
+    SELECT 6, 5,    'マウス',           '/1/5/6/'   FROM DUAL UNION ALL
+    SELECT 7, 5,    'キーボード',       '/1/5/7/'   FROM DUAL UNION ALL
+    SELECT 8, 6,    'ゲーミングマウス', '/1/5/6/8/' FROM DUAL
+)
+SELECT
+    LPAD('-', 2 * (depth - 1), '-') || category_name AS indented_name,
+    breadcrumb,
+    descendant_count
+FROM (
+    SELECT
+        m.category_id,
+        m.category_name,
+        m.mat_path,
+        -- MAT_PATH中の「/」の個数から階層の深さを逆算する
+        (LENGTH(m.mat_path) - LENGTH(REPLACE(m.mat_path, '/', ''))) - 1 AS depth,
+        -- ① 祖先判定：「相手のパスが、自分のパスの前方一致になっている」＝相手は自分の祖先（自分自身も含む）
+        (
+            SELECT LISTAGG(a.category_name, ' > ') WITHIN GROUP (ORDER BY LENGTH(a.mat_path))
+            FROM category_master a
+            WHERE m.mat_path LIKE a.mat_path || '%'
+        ) AS breadcrumb,
+        -- ② 子孫判定：「自分のパスが、相手のパスの前方一致になっている」＝相手は自分の子孫
+        (
+            SELECT COUNT(*)
+            FROM category_master d
+            WHERE d.mat_path LIKE m.mat_path || '%'
+              AND d.category_id != m.category_id
+        ) AS descendant_count
+    FROM category_master m
+) sub
+ORDER BY mat_path
+```
+## 解説
+今回は、前回（問題14-12：入れ子集合モデル）に続き、『プログラマのためのSQLグラフ原論』で紹介されている木構造の実装パターン第2弾、「経路列挙モデル（Path Enumeration Model）」を扱います。
+
+問題14-3ではすでに`hierarchy_path`という経路文字列を扱っていましたが、あれは再帰CTEの中で**クエリ実行のたびに動的生成**したものでした。今回はその一歩先、「経路文字列をテーブルの実列として持たせてしまう（マテリアライズする）」という設計を扱います。
+
+```mermaid
+flowchart TD
+    subgraph A14_3["問題14-3：動的生成"]
+        direction TB
+        A1["クエリ実行のたびに
+        再帰CTEでhierarchy_pathを組み立て"] --> A2["再帰処理のコストが
+        毎回発生する"]
+    end
+    subgraph A14_13["今回・問題14-13：実列保持"]
+        direction TB
+        B1["MAT_PATH列として
+        あらかじめテーブルに格納済み"] --> B2["再帰なしで
+        LIKE演算だけで完結"]
+    end
+```
+
+このモデルの核心は、たった1つの性質に集約されます。**「あるノードのパスが、別のノードのパスを前方一致で含んでいれば、後者は前者の祖先である」**という関係です。
+
+```mermaid
+flowchart LR
+    A["/1/5/6/8/
+    （ゲーミングマウス）"] -->|"LIKE '/1/5/6/%'
+    に一致"| B["/1/5/6/
+    （マウス）"]
+    A -->|"LIKE '/1/5/%'
+    に一致"| C["/1/5/
+    （周辺機器）"]
+    A -->|"LIKE '/1/%'
+    に一致"| D["/1/
+    （家電）"]
+```
+
+解答例では、この性質を**両方向**から使っています。1つ目は`BREADCRUMB`（パンくずリスト）で、「自分の`MAT_PATH`が相手の`MAT_PATH`を前方一致で含んでいる（＝相手は自分の祖先）」という条件`m.mat_path LIKE a.mat_path || '%'`で、自分自身を含む全祖先を抽出し、パスの短い順（＝上位階層から）に`LISTAGG`で連結しています。2つ目は`DESCENDANT_COUNT`で、逆に「相手の`MAT_PATH`が自分の`MAT_PATH`を前方一致で含んでいる（＝相手は自分の子孫）」という条件`d.mat_path LIKE m.mat_path || '%'`で配下全員を数え、自分自身を`!=`で明示的に除外しています。
+
+NG例で示したとおり、この「自分自身の除外」を忘れると、末端カテゴリでも`DESCENDANT_COUNT`が0ではなく1になってしまいます。前方一致検索は「自分自身にも一致してしまう」という性質があることを常に意識しておく必要があります。
+
+もう1つ注目してほしいのが、`ORDER BY mat_path`だけで深さ優先探索の順序が再現できている点です。
+```sql
+'/1/5/6/'   < '/1/5/6/8/' < '/1/5/7/'
+（マウス）    （ゲーミングマウス） （キーボード）
+```
+文字列としての大小比較は、まず共通の親部分（`/1/5/`）が一致し、次に分岐点の文字（`6`か`7`か）で決まります。子孫の経路は必ず親の経路を前方一致で含むため、「親は子より必ず先に来る」「兄弟同士は自分の`ID`順に並ぶ」という性質が、特別な工夫なしに自然に成立します。本章14-8で`CONNECT BY`なしの再帰CTEでは`ORDER BY employee_tree`という文字列ソートの応用技が必要でしたが、経路列挙モデルではこれが**最初からテーブルの列として持たされている**ため、より素直に使えます。
+
+これで木構造の3つの実装パターンが出揃いました。それぞれの向き・不向きを整理します。
+
+| 観点 | 隣接リスト（`CONNECT BY`） | 入れ子集合（14-12） | 経路列挙（今回） |
+| :--- | :--- | :--- | :--- |
+| 祖先・子孫の検索 | 再帰的な探索が必要 | `BETWEEN`で一発 | `LIKE`で一発 |
+| ノード1件の追加 | 親IDを設定するだけ（軽い） | 挿入位置より右側全体を再採番（重い） | 親の`MAT_PATH`をコピーして`/自分のID/`を付与するだけ（軽い） |
+| ノードの移動（配下ごと） | 該当ノードの親IDを1件書き換えるだけ（軽い） | 移動元・移動先の周辺を広く再採番（非常に重い） | **移動したノード自身とその配下全員**の`MAT_PATH`を書き換える必要がある（中程度） |
+| 可読性 | 親IDだけなので直感的 | `lft`/`rgt`の意味の習得が必要 | パス文字列を見れば人間にも経路が分かりやすい |
+
+経路列挙モデルは、入れ子集合モデルほど更新コストが高くない（動く範囲が「移動したノードの配下」だけで済み、ツリー全体の再採番は不要）一方、隣接リストモデルほど更新が軽くもない（配下が多いノードを動かすと、その配下全員の`MAT_PATH`を書き換える必要がある）という、**ちょうど中間に位置するモデル**です。「祖先・子孫検索の速さ」と「更新コストの軽さ」のバランスを取りたい、URLのパンくずリスト表示や、Slackのスレッド返信構造、ファイルシステムのパス管理などで好んで採用されます。
+
+---
+<br><br>
+
+# 【完全版】問題14-14：推移閉包（Transitive Closure）テーブルの生成 ── 権限判定への応用
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+これまでの階層問い合わせは「特定の1人（あるいは1つの根）を起点に、そこから辿れる範囲を探索する」という使い方が中心でした。しかし実務では、「AさんはBさんの（直接・間接を問わない）上司にあたるか？」といった**任意の2人の組み合わせ**について、祖先・子孫の関係を都度チェックしたい場面が多くあります。
+
+そのたびに`CONNECT BY`を実行して探索し直すのは非効率です。そこで登場するのが「**推移閉包（Transitive Closure）**」という考え方です。これは、木（あるいはグラフ）に存在する**すべての祖先-子孫のペアとその距離**を、あらかじめ1枚の表としてまとめておく手法です。一度この表を作ってしまえば、以降は単純な`WHERE`検索だけで「AはBの上司か」を判定でき、再帰処理を毎回走らせる必要がなくなります。
+
+検証用に、HRスキーマの`EMPLOYEES`テーブルの一部を使用します。
+```sql
+-- 本問題の検証用データソース（クエリの先頭に配置します）
+WITH test_employees AS (
+    SELECT
+        employee_id,
+        manager_id,
+        first_name || ' ' || last_name AS emp_name
+    FROM
+        hr.employees
+    WHERE
+        employee_id IN (100, 101, 102, 103, 104, 108, 109, 110)
+)
+```
+組織構造は以下のとおりです。
+```
+100 Steven King
+├─101 Neena Yang
+│  └─108 Nancy Gruenberg
+│     ├─109 Daniel Faviet
+│     └─110 John Chen
+└─102 Lex Garcia
+   └─103 Alexander James
+      └─104 Bruce Miller
+```
+
+上記の`test_employees`をデータソースとし、以下の手順で推移閉包テーブルを構築したうえで、各従業員について **「自分より上位にいる人数（直接・間接を問わない）」** と **「自分より下位にいる人数（直接・間接を問わない）」** を求めてください。
+
+**【抽出・編集ルール】**
+1. **STEP1（推移閉包の構築）**：`test_employees`の**全ての行を起点候補**として`CONNECT BY`で展開し、`ANCESTOR_ID`（起点＝祖先）・`DESCENDANT_ID`（到達先＝子孫）・`DISTANCE`（階層差。自分自身との組は`0`）の3列からなる推移閉包を、`WITH`句内で構築すること。
+2. **STEP2（集計）**：STEP1で構築した推移閉包を**再度`CONNECT BY`を使わずに**参照するだけで、以下を算出すること。
+   * **ANCESTOR_COUNT**：自分より上位にいる人数（`DISTANCE >= 1`の祖先の数）
+   * **DESCENDANT_COUNT**：自分より下位にいる人数（`DISTANCE >= 1`の子孫の数）
+3. **並び順**：`EMPLOYEE_ID`昇順。
+
+## 期待する結果
+| EMPLOYEE_ID | EMP_NAME        | ANCESTOR_COUNT | DESCENDANT_COUNT | 
+| ------------- | ----------------- | ---------------- | ------------------ | 
+| 100           | Steven King     | 0                | 7                  | 
+| 101           | Neena Yang      | 1                | 3                  | 
+| 102           | Lex Garcia      | 1                | 2                  | 
+| 103           | Alexander James | 2                | 1                  | 
+| 104           | Bruce Miller    | 3                | 0                  | 
+| 108           | Nancy Gruenberg | 2                | 2                  | 
+| 109           | Daniel Faviet   | 3                | 0                  | 
+| 110           | John Chen       | 3                | 0                  | 
+
+## NG例
+```sql
+-- 「START WITH 1=1」を「START WITH manager_id IS NULL」に変えてしまった誤りの例
+WITH test_employees AS (
+    SELECT
+        employee_id,
+        manager_id,
+        first_name || ' ' || last_name AS emp_name
+    FROM
+        hr.employees
+    WHERE
+        employee_id IN (100, 101, 102, 103, 104, 108, 109, 110)
+),
+transitive_closure AS (
+    SELECT
+        CONNECT_BY_ROOT employee_id AS ancestor_id,
+        employee_id AS descendant_id,
+        LEVEL - 1 AS distance
+    FROM test_employees
+    START WITH manager_id IS NULL   -- ★社長（100）だけを起点にしてしまっている
+    CONNECT BY PRIOR employee_id = manager_id
+)
+SELECT
+    e.employee_id,
+    e.emp_name,
+    (SELECT COUNT(*) FROM transitive_closure WHERE descendant_id = e.employee_id AND distance >= 1) AS ancestor_count,
+    (SELECT COUNT(*) FROM transitive_closure WHERE ancestor_id = e.employee_id AND distance >= 1) AS descendant_count
+FROM test_employees e
+ORDER BY e.employee_id
+```
+**【診断】** エラーは一切出ず、`EMPLOYEE_ID = 100`の行だけは正しい結果（`ANCESTOR_COUNT=0`, `DESCENDANT_COUNT=7`）を返すため、一見成功しているように見えます。しかしそれ以外の行、例えば`101`（Neena Yang）を見ると`DESCENDANT_COUNT`が正しい`3`ではなく`0`になってしまいます。これは`START WITH manager_id IS NULL`では**社長（100）を根とする1回きりの探索**しか行われず、「101を起点とした探索」「108を起点とした探索」……がそもそも実行されないためです。`CONNECT_BY_ROOT`は「その行が辿り着いた起点」を返しますが、**起点として選ばれなかった行は、他の誰かの祖先として推移閉包に登場する機会自体を失います**。値が0という「ありえそうな数字」で返ってくるため、テストデータの検算をしないと見逃しやすい典型的なサイレントバグです。
+
+## 解答例
+```sql
+WITH test_employees AS (
+    SELECT
+        employee_id,
+        manager_id,
+        first_name || ' ' || last_name AS emp_name
+    FROM
+        hr.employees
+    WHERE
+        employee_id IN (100, 101, 102, 103, 104, 108, 109, 110)
+),
+-- 【STEP1】推移閉包の構築：全ての行を「起点候補」として展開する
+transitive_closure AS (
+    SELECT
+        CONNECT_BY_ROOT employee_id AS ancestor_id,
+        employee_id                 AS descendant_id,
+        LEVEL - 1                   AS distance
+    FROM
+        test_employees
+    START WITH
+        1 = 1   -- 全ての行を起点として扱う（＝各人を根とした探索をそれぞれ独立に行う）
+    CONNECT BY
+        PRIOR employee_id = manager_id
+)
+-- 【STEP2】集計：推移閉包テーブルを再帰なしで参照するだけ
+SELECT
+    e.employee_id,
+    e.emp_name,
+    (
+        SELECT COUNT(*)
+        FROM transitive_closure
+        WHERE descendant_id = e.employee_id
+          AND distance >= 1
+    ) AS ancestor_count,
+    (
+        SELECT COUNT(*)
+        FROM transitive_closure
+        WHERE ancestor_id = e.employee_id
+          AND distance >= 1
+    ) AS descendant_count
+FROM
+    test_employees e
+ORDER BY
+    e.employee_id
+```
+## 解説
+今回は、『プログラマのためのSQLグラフ原論』が扱うテーマの中でも特に応用範囲の広い「推移閉包（Transitive Closure）」です。前回・前々回の入れ子集合モデル（14-12）や経路列挙モデル（14-13）が「木構造を効率よく**表現**する」ためのモデルだったのに対し、推移閉包は「木・グラフに存在する**全ての到達可能性（reachability）を、あらかじめ総当たりで洗い出しておく**」という、少し毛色の異なるアプローチです。
+
+```mermaid
+flowchart TD
+    A["隣接リストモデル
+    (manager_id)"] -->|"各ノードを起点に
+    CONNECT BYで展開"| B["推移閉包テーブル
+    (ancestor_id, descendant_id, distance)"]
+    B -->|"以降は再帰なしで
+    WHERE検索だけ"| C["「AはBの上司か？」
+    を一瞬で判定"]
+```
+
+### STEP1：全ノードを起点にする発想
+このクエリの最大のポイントは`START WITH 1 = 1`です。これまでの`START WITH`は「社長（`manager_id IS NULL`）」のように**1つの根**を指定するのが定番でしたが、`1 = 1`という常に真になる条件を指定すると、**`test_employees`の全ての行がそれぞれ独立した起点（ルート）として扱われます**。
+
+```mermaid
+flowchart LR
+    subgraph Root100["100を起点とした探索"]
+        A1["100→101→108→109,110"]
+        A2["100→102→103→104"]
+    end
+    subgraph Root101["101を起点とした探索"]
+        B1["101→108→109,110"]
+    end
+    subgraph Root108["108を起点とした探索"]
+        C1["108→109,110"]
+    end
+```
+
+Oracleは`CONNECT BY`実行時、`START WITH`条件に一致する行それぞれについて**独立したツリー探索を行います**。`CONNECT_BY_ROOT employee_id`は「今処理している行が、どの起点から辿り着いたものか」を返す演算子なので、「100を起点にした探索で108に辿り着いた行」には`ANCESTOR_ID=100, DESCENDANT_ID=108`が、「101を起点にした探索で108に辿り着いた行」には`ANCESTOR_ID=101, DESCENDANT_ID=108`が、それぞれ独立して生成されます。全員を起点にすることで、**全ての祖先-子孫ペアの組み合わせ**が漏れなく生成されるという仕組みです。
+
+NG例で示したとおり、ここで起点を「社長だけ」に絞ってしまうと、「101から見て108は部下」「108から見て109は部下」といった**中間ノードを起点とする視点**が丸ごと欠落してしまいます。これは`CONNECT BY`の「複数ルート」という性質を正しく理解していないと陥りやすい落とし穴です。
+
+### STEP2：閉包テーブルを「引くだけ」にする
+一度`transitive_closure`さえ完成してしまえば、STEP2では`CONNECT BY`も`START WITH`も一切登場していません。単に`WHERE descendant_id = ...`や`WHERE ancestor_id = ...`で件数を数えるだけの、ごく普通の`SELECT`文です。
+
+| | 都度`CONNECT BY`で探索 | 推移閉包テーブルを1回構築 |
+| :--- | :--- | :--- |
+| 「AはBの上司か？」の判定 | そのたびに階層問い合わせを実行 | `WHERE ancestor_id=A AND descendant_id=B`の存在チェックだけ |
+| 大量のペアを一括判定したい場合 | ペアの数だけクエリ発行、または複雑な結合が必要 | 1回のJOIN・COUNTで完結 |
+| 組織変更（異動）への追従 | 常に最新の状態を自動で反映 | 推移閉包テーブルの再構築（作り直し）が必要 |
+
+この特性から、推移閉包は「頻繁には変わらないが、頻繁に問い合わせが発生する」場面で真価を発揮します。典型的なのが、ロールベースのアクセス制御（RBAC）で「ロールAはロールBの権限を継承しているか」を大量のリクエストのたびに毎回`CONNECT BY`で計算するのではなく、ロール階層が変わったときだけ推移閉包を再構築しておき、以降のアクセス判定は単純な存在チェックで済ませる権限管理システム、商品カテゴリや組織図で「このカテゴリ（部署）の配下に、あのカテゴリ（部署）は含まれるか」を毎回問い合わせるECサイトの検索フィルタや権限委譲チェックなどです。
+
+今回`DISTANCE`（階層差）も併せて持たせているのは、単なる「祖先かどうか（Yes/No）」だけでなく、「何階層離れた祖先か」まで一度に判定できるようにするためです。例えば「経費精算は直属上司ではなく、**2階層以上**離れた上位者の決裁が必要」といった多段階承認ルールも、`WHERE ancestor_id = X AND distance >= 2`という条件だけで、再帰処理なしに判定できます。
+
+なお今回はデータが8件と小規模なため気づきにくいですが、全ノードを起点にする推移閉包の構築は、ノード数が`N`のとき最悪`N`回の探索が走る計算量になり、数万件規模の巨大な階層では非常に重くなる可能性があります。実務では「階層構造の更新頻度」と「閉包テーブルの再構築コスト」を天秤にかけ、バッチ処理で夜間に再構築する、あるいは異動が発生した該当ラインだけを差分更新するといった工夫が必要になります。

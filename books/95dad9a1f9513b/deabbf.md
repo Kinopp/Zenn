@@ -1,5 +1,5 @@
 ---
-title: "第12章 分析関数②（全1問）"
+title: "第12章 分析関数②（全10問：うち問題のみ9問）"
 free: false
 ---
 
@@ -239,7 +239,6 @@ SHスキーマの`PRODUCTS`テーブルより、製品カテゴリ（`PROD_CATEG
 * 価格（`PROD_LIST_PRICE`）の**降順**（高い順）で並べた際の分布を計算してください。
 * 計算結果は小数点第4位を四捨五入して表示してください。
 * 結果は、定価の降順で表示してください。
-
 ## 期待する結果
 | PROD_ID | PROD_NAME                       | PROD_LIST_PRICE | CUME_DIST_VAL | PERCENT_RANK_VAL | 
 | ------- | -------------------------------- | ---------------- | -------------- | ------------------ | 
@@ -354,6 +353,113 @@ HRスキーマの `EMPLOYEES` テーブルを使用し、各部門（`DEPARTMENT
 | 50              | 3475.56    | 3100          | 375.56    | 
 | 80              | 8955.88    | 8900          | 55.88     | 
 | 100             | 8601.33    | 8000          | 601.33    | 
+
+## 解答例、解説
+[![](https://static.zenn.studio/user-upload/d958a6990064-20260508.png)](https://zenn.dev/kinopp/books/0b24d659785f31)
+
+----
+<br><br>
+
+# 【完全版】問題12-21：IGNORE NULLSによる欠損値の前方補完（為替レートの穴埋め）
+### 難易度：★★★☆☆ (Lv.3)
+## 問題
+経理部門が管理している月次の為替レート表は、レートが変動した月にだけ値が記録されており、変動がなかった月は`NULL`のまま放置されています。この「歯抜け」のレート表を、**直近に記録されていたレートで埋める（前方補完する）** SQLを作成してください。
+
+**【条件およびルール】**
+* データは通貨（`CURRENCY_CD`）ごとに、`RATE_MONTH`（対象月）の昇順で並んでいます。
+* `RATE`列にレートが記録されている月は、その値をそのまま表示してください。
+* `RATE`列が`NULL`の月は、**同じ通貨の中で直近に記録されていた（NULLではない）レート**を使って埋めてください。
+* 埋めた結果は`FILLED_RATE`列として表示してください（`RATE`列自体は変更しません）。
+* 結果は通貨コードの昇順、次に対象月の昇順で表示してください。
+
+**【前提データ（WITH句）】**
+```sql
+WITH exchange_rates AS (
+    SELECT DATE '2024-01-01' AS rate_month, 'USD' AS currency_cd, 150.00 AS rate FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'USD', 148.50 FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'USD', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'USD', 152.00 FROM dual UNION ALL
+    SELECT DATE '2024-01-01', 'EUR', 160.00 FROM dual UNION ALL
+    SELECT DATE '2024-02-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-03-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-04-01', 'EUR', 158.00 FROM dual UNION ALL
+    SELECT DATE '2024-05-01', 'EUR', NULL   FROM dual UNION ALL
+    SELECT DATE '2024-06-01', 'EUR', NULL   FROM dual
+)
+SELECT * FROM exchange_rates
+```
+
+## 期待する結果
+| CURRENCY_CD | RATE_MONTH | RATE  | FILLED_RATE | 
+| ----------- | ---------- | ----- | ----------- | 
+| EUR         | 2024/01    | 160   | 160         | 
+| EUR         | 2024/02    |       | 160         | 
+| EUR         | 2024/03    |       | 160         | 
+| EUR         | 2024/04    | 158   | 158         | 
+| EUR         | 2024/05    |       | 158         | 
+| EUR         | 2024/06    |       | 158         | 
+| USD         | 2024/01    | 150   | 150         | 
+| USD         | 2024/02    |       | 150         | 
+| USD         | 2024/03    | 148.5 | 148.5       | 
+| USD         | 2024/04    |       | 148.5       | 
+| USD         | 2024/05    |       | 148.5       | 
+| USD         | 2024/06    | 152   | 152         | 
+
+## 解答例、解説
+[![](https://static.zenn.studio/user-upload/d958a6990064-20260508.png)](https://zenn.dev/kinopp/books/0b24d659785f31)
+
+----
+<br><br>
+
+# 【完全版】問題12-22：WIDTH_BUCKETによる度数分布表（ヒストグラム）の作成
+### 難易度：★★★★☆ (Lv.4)
+## 問題
+とある店舗の1日の購入履歴（返品によるマイナス金額や、まとめ買いによる高額決済も含む）をもとに、購入金額の**度数分布表（ヒストグラム）** を作成してください。
+
+**【条件およびルール】**
+* 購入金額を **0円から10,000円まで、2,000円刻みの5つの区分（ビン）** に分類してください。
+* 0円未満（返品によるマイナス金額）は「**0円未満（返品）**」という区分にまとめてください。
+* 10,000円以上（範囲の上限を超える高額決済）は「**10,000円以上（VIP）**」という区分にまとめてください。
+* 各区分に該当する件数（`PURCHASE_COUNT`）を集計してください。
+* 結果は区分番号（`BUCKET_NO`）の昇順で表示してください。
+
+**【前提データ（WITH句）】**
+```sql
+WITH sales_log AS (
+    SELECT 1200  AS purchase_amount FROM dual UNION ALL
+    SELECT 3400  FROM dual UNION ALL
+    SELECT 7600  FROM dual UNION ALL
+    SELECT 500   FROM dual UNION ALL
+    SELECT 2200  FROM dual UNION ALL
+    SELECT 9800  FROM dual UNION ALL
+    SELECT 4300  FROM dual UNION ALL
+    SELECT 6700  FROM dual UNION ALL
+    SELECT 1500  FROM dual UNION ALL
+    SELECT 8900  FROM dual UNION ALL
+    SELECT 3300  FROM dual UNION ALL
+    SELECT 5600  FROM dual UNION ALL
+    SELECT -500  FROM dual UNION ALL  -- 返品
+    SELECT 7200  FROM dual UNION ALL
+    SELECT 15000 FROM dual UNION ALL  -- VIP顧客のまとめ買い
+    SELECT 4800  FROM dual UNION ALL
+    SELECT 6100  FROM dual UNION ALL
+    SELECT 2700  FROM dual
+)
+SELECT * FROM sales_log
+```
+
+## 期待する結果
+| BUCKET_NO | PRICE_RANGE         | PURCHASE_COUNT | 
+| --------- | ------------------- | -------------- | 
+| 0         | 0円未満（返品）     | 1              | 
+| 1         | 0～2,000円未満      | 3              | 
+| 2         | 2,000～4,000円未満  | 4              | 
+| 3         | 4,000～6,000円未満  | 3              | 
+| 4         | 6,000～8,000円未満  | 4              | 
+| 5         | 8,000～10,000円未満 | 2              | 
+| 6         | 10,000円以上（VIP） | 1              | 
 
 ## 解答例、解説
 [![](https://static.zenn.studio/user-upload/d958a6990064-20260508.png)](https://zenn.dev/kinopp/books/0b24d659785f31)

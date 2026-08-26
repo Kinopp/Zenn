@@ -1,5 +1,5 @@
 ---
-title: "第4章 色々な条件（全12問）"
+title: "第4章 色々な条件①（全15問）"
 free: false
 ---
 
@@ -1029,3 +1029,519 @@ WHERE job_id IN ('SA_REP', 'SA_MAN')
 カッコの優先順位を気にする必要が減り、対象の職種が5つ、10個と増えてもコードがすっきりするのがメリットです。
 
 条件が3つ、4つと増える複雑なクエリでは、「自分では優先順位を理解していても、あえてカッコを付ける」という習慣が有効です。誰が読んでもどの条件とどの条件がセットなのかが一瞬で伝わるように書くことが、後から修正しやすいクエリにつながります。
+
+---
+<br><br>
+
+# 問題4-13：複数値による分岐処理（DECODE関数）
+### 難易度：★★☆☆☆ (Lv.2)
+
+## 問題
+次の`WITH`句で作成する **`SALES_STAFF`**（営業スタッフの歩合データ）を使用します。
+
+```sql
+WITH sales_staff AS (
+    SELECT 1001 AS employee_id, 'Tanaka'    AS employee_name, 'SA_REP'   AS job_id, 0.10 AS commission_pct FROM dual UNION ALL
+    SELECT 1002, 'Suzuki',    'SA_REP',   0.15 FROM dual UNION ALL
+    SELECT 1003, 'Sato',      'SA_MAN',   0.20 FROM dual UNION ALL
+    SELECT 1004, 'Takahashi', 'SA_MAN',   0.25 FROM dual UNION ALL
+    SELECT 1005, 'Ito',       'SA_MAN',   0.30 FROM dual UNION ALL
+    SELECT 1006, 'Watanabe',  'SA_MAN',   0.35 FROM dual UNION ALL
+    SELECT 1007, 'Yamamoto',  'SA_MAN',   0.40 FROM dual UNION ALL
+    SELECT 1008, 'Nakamura',  'ST_CLERK', NULL FROM dual UNION ALL
+    SELECT 1009, 'Kobayashi', 'AD_ASST',  NULL FROM dual UNION ALL
+    SELECT 1010, 'Kato',      'SA_REP',   0.12 FROM dual
+)
+SELECT * FROM sales_staff
+```
+
+`COMMISSION_PCT`（歩合率）の値に応じて、以下のルールで「歩合ランク」列を追加してください。**`DECODE`関数**を使って実現してください。
+
+**【歩合ランクの分類ルール】**
+* `0.10` または `0.15` → **`'Cランク'`**
+* `0.20` または `0.25` → **`'Bランク'`**
+* `0.30` または `0.35` → **`'Aランク'`**
+* `0.40` → **`'Sランク'`**
+* **`NULL`（歩合なし）** → **`'歩合なし'`**
+* **上記のいずれにも一致しない** → **`'区分外'`**
+
+なお、レコードは`EMPLOYEE_ID`の昇順で表示してください。
+
+## 期待する結果
+| EMPLOYEE_ID | EMPLOYEE_NAME | JOB_ID   | COMMISSION_PCT | 歩合ランク | 
+| ----------- | ------------- | -------- | -------------- | ---------- | 
+| 1001        | Tanaka        | SA_REP   | 0.1            | Cランク    | 
+| 1002        | Suzuki        | SA_REP   | 0.15           | Cランク    | 
+| 1003        | Sato          | SA_MAN   | 0.2            | Bランク    | 
+| 1004        | Takahashi     | SA_MAN   | 0.25           | Bランク    | 
+| 1005        | Ito           | SA_MAN   | 0.3            | Aランク    | 
+| 1006        | Watanabe      | SA_MAN   | 0.35           | Aランク    | 
+| 1007        | Yamamoto      | SA_MAN   | 0.4            | Sランク    | 
+| 1008        | Nakamura      | ST_CLERK |                | 歩合なし   | 
+| 1009        | Kobayashi     | AD_ASST  |                | 歩合なし   | 
+| 1010        | Kato          | SA_REP   | 0.12           | 区分外     | 
+
+## 解答例
+```sql
+WITH sales_staff AS (
+    SELECT 1001 AS employee_id, 'Tanaka'    AS employee_name, 'SA_REP'   AS job_id, 0.10 AS commission_pct FROM dual UNION ALL
+    SELECT 1002, 'Suzuki',    'SA_REP',   0.15 FROM dual UNION ALL
+    SELECT 1003, 'Sato',      'SA_MAN',   0.20 FROM dual UNION ALL
+    SELECT 1004, 'Takahashi', 'SA_MAN',   0.25 FROM dual UNION ALL
+    SELECT 1005, 'Ito',       'SA_MAN',   0.30 FROM dual UNION ALL
+    SELECT 1006, 'Watanabe',  'SA_MAN',   0.35 FROM dual UNION ALL
+    SELECT 1007, 'Yamamoto',  'SA_MAN',   0.40 FROM dual UNION ALL
+    SELECT 1008, 'Nakamura',  'ST_CLERK', NULL FROM dual UNION ALL
+    SELECT 1009, 'Kobayashi', 'AD_ASST',  NULL FROM dual UNION ALL
+    SELECT 1010, 'Kato',      'SA_REP',   0.12 FROM dual
+)
+SELECT
+    employee_id,
+    employee_name,
+    job_id,
+    commission_pct,
+    DECODE(commission_pct,
+        NULL, '歩合なし',
+        0.10, 'Cランク',
+        0.15, 'Cランク',
+        0.20, 'Bランク',
+        0.25, 'Bランク',
+        0.30, 'Aランク',
+        0.35, 'Aランク',
+        0.40, 'Sランク',
+        '区分外'
+    ) AS "歩合ランク"
+FROM
+    sales_staff
+ORDER BY
+    employee_id
+```
+
+## 解説
+問題4-8では「CASE式」による条件分岐を扱いましたが、今回はOracle独自の関数である **`DECODE`** を使った分岐処理です。基本構文は次の通りです。
+
+```sql
+DECODE(対象の値,
+    検索値1, 結果1,
+    検索値2, 結果2,
+    ...
+    デフォルト値
+)
+```
+
+「対象の値」を先頭から順に「検索値」と比較していき、最初に一致したところの「結果」を返します。どの検索値にも一致しなかった場合は、最後に置いた「デフォルト値」が返されます（省略した場合はNULLになります）。
+
+```mermaid
+flowchart TD
+    A["COMMISSION_PCT の値"] --> B{"NULLか？"}
+    B -->|"Yes"| C["'歩合なし'"]
+    B -->|"No"| D{"0.10 or 0.15？"}
+    D -->|"Yes"| E["'Cランク'"]
+    D -->|"No"| F{"0.20 or 0.25？"}
+    F -->|"Yes"| G["'Bランク'"]
+    F -->|"No"| H{"0.30 or 0.35？"}
+    H -->|"Yes"| I["'Aランク'"]
+    H -->|"No"| J{"0.40？"}
+    J -->|"Yes"| K["'Sランク'"]
+    J -->|"No"| L["'区分外'（デフォルト値）"]
+```
+
+今回の問題文だけを見ると「これはCASE式でも書けるのでは？」と思われるかもしれません。実際その通りで、`DECODE`は等価比較による分岐しかできない分、検索CASE式の完全な下位互換です。しかし今回あえて`DECODE`を扱ったのは、**「NULLの扱いだけは、DECODEとCASE式で挙動が違う」** という、Oracle特有の重要な性質を紹介するためです。
+
+### DECODEはNULLを「値」として比較できる
+
+4-1の解説で「NULLは`=`で判定できない（`col = NULL`は常にUNKNOWN）」と説明しました。ところが`DECODE`だけは特別扱いで、**`DECODE(対象, NULL, 結果, ...)`と書くと、対象がNULLのときにきちんとその行にマッチします。**
+
+```sql
+-- 通常の比較では常にUNKNOWNになり、絶対に真にならない
+WHERE commission_pct = NULL        -- ✕ 常にヒットしない
+
+-- DECODEの中でだけは、NULL同士を「一致」とみなしてくれる
+DECODE(commission_pct, NULL, '歩合なし', ...)  -- ⭕ NULLの行が'歩合なし'になる
+```
+
+これは`DECODE`が古くからOracle独自の関数として実装されており、内部的に`=`演算子とは異なる特別な比較ロジック（NULL-safeな等価判定）を持っているためです。今回の期待する結果で、`Nakamura`さんと`Kobayashi`さんの`COMMISSION_PCT`が`NULL`であるにもかかわらず、きちんと「歩合なし」と表示されているのはこの性質のおかげです。
+
+### 同じことを単純CASE式でやろうとすると失敗する
+
+この性質を知らずに、4-8で扱った「単純CASE式」で同じロジックを書こうとすると、意図しない結果になります。
+
+```sql:❌ 失敗例：単純CASE式でNULLを分岐しようとした場合
+SELECT
+    employee_id,
+    commission_pct,
+    CASE commission_pct
+        WHEN NULL THEN '歩合なし'   -- ← これは絶対にマッチしない
+        WHEN 0.10 THEN 'Cランク'
+        WHEN 0.15 THEN 'Cランク'
+        -- （中略）
+        ELSE '区分外'
+    END AS "歩合ランク"
+FROM
+    sales_staff
+```
+
+単純CASE式の`WHEN NULL THEN ...`は、内部的に`commission_pct = NULL`という比較として処理されるため、**絶対にTRUEになりません。** 結果として`Nakamura`さんと`Kobayashi`さんは「歩合なし」ではなく、`ELSE`句の「区分外」に落ちてしまいます。一見エラーにもならず、それらしい結果が返ってくるため、テストデータにNULLが含まれていないと気づきにくい、非常に厄介な間違いです。
+
+正しく単純CASE式・検索CASE式でNULLを分岐したい場合は、次のように **`IS NULL`を明示的に条件へ含める** 必要があります。
+
+```sql:⭕ 正しい書き方：検索CASE式でNULLを明示的に判定
+CASE
+    WHEN commission_pct IS NULL THEN '歩合なし'
+    WHEN commission_pct IN (0.10, 0.15) THEN 'Cランク'
+    WHEN commission_pct IN (0.20, 0.25) THEN 'Bランク'
+    WHEN commission_pct IN (0.30, 0.35) THEN 'Aランク'
+    WHEN commission_pct = 0.40 THEN 'Sランク'
+    ELSE '区分外'
+END AS "歩合ランク"
+```
+
+| 書き方 | NULLの分岐 | 備考 |
+| :--- | :--- | :--- |
+| `DECODE(col, NULL, ...)` | ⭕ そのまま書ける | Oracle独自のNULL-safe比較 |
+| 単純CASE式 `WHEN NULL THEN ...` | ❌ 絶対にマッチしない | `col = NULL`と同じ扱いになるため |
+| 検索CASE式 `WHEN col IS NULL THEN ...` | ⭕ 明示すれば書ける | 一番安全な書き方 |
+
+### DECODEとCASE式、結局どちらを使うべきか
+
+`Kato`さんの`COMMISSION_PCT`（0.12）のように、どのルールにも該当しない値は、`DECODE`・CASE式のどちらでも最後の「デフォルト値／ELSE句」にきちんと落ちて「区分外」になります。この点は両者に差はありません。
+
+| 観点 | DECODE | CASE式 |
+| :--- | :--- | :--- |
+| 比較条件 | 等価（`=`）のみ | `IN`、`BETWEEN`、`IS NULL`など自由 |
+| NULLの扱い | そのまま比較値として書ける | `IS NULL`を明示する必要がある |
+| 標準SQLとしての可搬性 | ❌ Oracle独自関数 | ⭕ ANSI標準 |
+| 可読性（条件が複雑な場合） | 条件が増えると読みにくい | WHEN句で意味が明確 |
+
+実務では、5-9の解説でも触れた通り、新規に書くコードでは`CASE`式が推奨されます。ただし`DECODE`は今も多くの既存システムに残っており、特に **「NULLを他の値と同列に並べて分岐したい」** というピンポイントな場面では、`IS NULL`を書かずに済む`DECODE`の簡潔さが今でも重宝されることがあります。古いコードを保守する際に「なぜここだけDECODEなんだろう」と思ったら、このNULLの挙動が理由になっているケースが多いです。
+
+:::message
+### DECODEのNULL-safe比較は「その他の値同士」には効かない
+今回紹介した「NULLも普通の値として比較できる」という性質は、あくまで**NULL同士の比較に限った特例**です。通常の数値・文字列同士の比較（`0.10`と`0.10`が一致するかなど）は、ごく普通の`=`比較と同じ扱いです。「DECODEは中身をすべて曖昧に比較してくれる」という誤解をしないよう注意してください。
+
+なお、この「NULLを値として比較できる」という考え方は、ISO SQL標準にも`IS NOT DISTINCT FROM`という形で存在します（Oracleでは`DECODE`や、19c以降であれば `col1 IS NOT DISTINCT FROM col2` に相当する書き方が可能です）。DECODEの一風変わった挙動は、実は「NULL-safe比較」という一般的なSQLの概念の、Oracle流の実装だったというわけです。
+:::
+
+## 参考リンク
+https://www.shift-the-oracle.com/sql/functions/decode.html
+
+---
+<br><br>
+
+# 問題4-14：複数列の組み合わせでの一致判定（行値式）
+### 難易度：★★★☆☆ (Lv.3)
+
+## 問題
+HRスキーマにある **`JOB_HISTORY`** テーブルから、次の **`(EMPLOYEE_ID, JOB_ID)`の組み合わせに完全一致する** 履歴のみを抽出してください。
+
+**【抽出したい組み合わせ】**
+* `EMPLOYEE_ID` が **101** かつ `JOB_ID` が **'AC_ACCOUNT'**
+* `EMPLOYEE_ID` が **200** かつ `JOB_ID` が **'AD_ASST'**
+
+> **ヒント**：`EMPLOYEE_ID`のリストと`JOB_ID`のリストをそれぞれ別々に`IN`で指定すると、意図しない組み合わせまで一致してしまいます。1回の`IN`で「複数列のペア」を丸ごと判定する書き方があります。
+
+なお、レコードは`EMPLOYEE_ID`の昇順で表示してください。
+
+## 期待する結果
+| EMPLOYEE_ID | START_DATE           | END_DATE             | JOB_ID     | DEPARTMENT_ID | 
+| ----------- | -------------------- | -------------------- | ---------- | ------------- | 
+| 101         | 2007-09-21T00:00:00Z | 2011-10-27T00:00:00Z | AC_ACCOUNT | 110           | 
+| 200         | 2005-09-17T00:00:00Z | 2011-06-17T00:00:00Z | AD_ASST    | 90            | 
+
+## 解答例
+```sql
+SELECT
+    employee_id,
+    start_date,
+    end_date,
+    job_id,
+    department_id
+FROM
+    hr.job_history
+WHERE
+    (employee_id, job_id) IN (
+        (101, 'AC_ACCOUNT'),
+        (200, 'AD_ASST')
+    )
+ORDER BY
+    employee_id
+```
+
+## 解説
+問題4-4で`IN`演算子を扱いましたが、あれは「1つの列」に対する複数候補の指定でした。今回はその発展形で、**複数の列をペアにして、そのペア単位で候補と一致するかどうか**を判定する書き方です。
+
+```sql
+WHERE (列1, 列2) IN (
+    (値1a, 値1b),
+    (値2a, 値2b)
+)
+```
+
+`(employee_id, job_id)`という「列の組」を作り、その組がカッコで囲まれた候補リストの**どれか1つとセットで完全一致するか**を判定します。これは一般に「行値式（Row Value Constructor）」と呼ばれる書き方です。
+
+```mermaid
+flowchart LR
+    A["JOB_HISTORY の各行"] --> B{"(EMPLOYEE_ID, JOB_ID) の組が
+    (101,'AC_ACCOUNT') または
+    (200,'AD_ASST') と一致するか？"}
+    B -->|"101,AC_ACCOUNT,110 → 一致"| C["結果に含まれる"]
+    B -->|"101,AC_MGR,110 → 不一致"| D["除外"]
+    B -->|"200,AD_ASST,90 → 一致"| C
+    B -->|"200,AC_ACCOUNT,90 → 不一致"| D
+```
+
+### なぜ列ごとに別々の`IN`ではダメなのか
+
+今回の問題のように「特定の従業員と特定の職種のペア」を狙って抽出したい場合、次のように列ごとに`IN`を分けて書きたくなるかもしれません。しかし、これは**危険な間違い**です。
+
+```sql:❌ NG例：列ごとに別々のINで組み合わせを表現しようとした場合
+SELECT
+    employee_id,
+    job_id,
+    department_id
+FROM
+    hr.job_history
+WHERE
+        employee_id IN (101, 200)
+    AND job_id IN ('AC_ACCOUNT', 'AD_ASST')
+```
+
+このNG例を実行すると、次の3行がヒットしてしまいます。
+
+| EMPLOYEE_ID | JOB_ID     | DEPARTMENT_ID | 判定 |
+| ----------- | ---------- | ------------- | :---: |
+| 101         | AC_ACCOUNT | 110           | ⭕ 本来欲しかった組み合わせ |
+| 200         | AD_ASST    | 90            | ⭕ 本来欲しかった組み合わせ |
+| 200         | AC_ACCOUNT | 90            | ❌ 意図しない組み合わせが混入 |
+
+`EMPLOYEE_ID`のリストと`JOB_ID`のリストは、それぞれ「独立した候補群」として評価されます。そのため、`employee_id = 200`という行と`job_id = 'AC_ACCOUNT'`という行が、たとえ「本来ペアにしたかった組み合わせ」でなくても、両方の条件をそれぞれ満たしてさえいれば結果に含まれてしまいます。
+
+```mermaid
+flowchart TD
+    subgraph NG["❌ 列ごとに別々のIN（総当たり）"]
+        direction TB
+        A1["employee_id IN (101, 200)"] -.->|"独立して評価"| A3["101×AC_ACCOUNT<br>101×AD_ASST<br>200×AC_ACCOUNT<br>200×AD_ASST<br>の4通りすべてが候補になりうる"]
+        A2["job_id IN ('AC_ACCOUNT', 'AD_ASST')"] -.->|"独立して評価"| A3
+    end
+    subgraph OK["⭕ 行値式（ペア単位で評価）"]
+        direction TB
+        B1["(employee_id, job_id) IN
+        ((101,'AC_ACCOUNT'), (200,'AD_ASST'))"] --> B2["指定した2通りの
+        組み合わせだけがヒット"]
+    end
+```
+
+この現象は、`EMPLOYEE_ID`の候補が2件、`JOB_ID`の候補が2件あることで、内部的には最大2×2＝4通りの「掛け合わせ」が許容されてしまうために起こります。今回はたまたま`JOB_HISTORY`の中に`(200, AC_ACCOUNT)`という余計な組み合わせの行が実在したため、意図しないデータが紛れ込みました。候補の数が増えれば増えるほど、この「掛け合わせ」による誤ヒットのリスクは指数関数的に高まります。
+
+一方、行値式`(employee_id, job_id) IN ((101,'AC_ACCOUNT'), (200,'AD_ASST'))`は、リストの中の各要素が最初から「ペアそのもの」として定義されているため、指定した組み合わせ以外は一切マッチしません。
+
+### AND/ORの組み合わせで書き換えることもできる
+
+行値式が使えない古いバージョンのOracleや、他のRDBMSへの移植を考える場合は、`OR`で個々のペアをつなぐ書き方でも同じ結果を再現できます。
+
+```sql:行値式と同じ結果を、ANDとORの組み合わせで表現
+SELECT
+    employee_id,
+    job_id,
+    department_id
+FROM
+    hr.job_history
+WHERE
+       (employee_id = 101 AND job_id = 'AC_ACCOUNT')
+    OR (employee_id = 200 AND job_id = 'AD_ASST')
+```
+
+これは問題4-12で扱った「カッコによる`AND`/`OR`の優先順位制御」そのものです。1ペアごとに`(条件1 AND 条件2)`とカッコで束ね、それを`OR`でつなぐことで、行値式と全く同じ「ペア単位の一致判定」を表現しています。
+
+| 書き方 | 可読性 | ペア数が増えたときの記述量 |
+| :--- | :--- | :--- |
+| 行値式 `(col1, col2) IN ((...),(...))` | ⭕ 意図が一目でわかる | ペアを1行追加するだけで済む |
+| `(条件A AND 条件B) OR (条件C AND 条件D)` | △ ペアが増えると長くなる | ペアごとにカッコとORが増えていく |
+
+候補ペアが2〜3件程度ならどちらでも大差ありませんが、10件、20件と増えていく場面では、行値式の方が圧倒的に短く、書き間違いも起きにくくなります。
+
+:::message
+### 行値式は左右の「列数」と「型」を揃える必要がある
+`(employee_id, job_id) IN ((101, 'AC_ACCOUNT'), ...)`のように、左側のカッコ内の列数と、右側の各候補タプルの要素数は必ず一致させる必要があります。列数が食い違うと`ORA-00913: 値の数が多すぎます`のようなエラーになります。また型についても、`employee_id`（数値）の位置には数値を、`job_id`（文字列）の位置には文字列を置く必要があり、順序を入れ替えると正しく比較されないので注意してください。
+
+なお、この行値式は`WHERE`句の`IN`だけでなく、`=`との組み合わせ（`WHERE (col1, col2) = (SELECT ...)`）や、後の章で扱うサブクエリとの比較でも登場します。「複数列をひとまとまりの単位として扱う」という考え方は、この先も繰り返し出てくる重要な概念です。
+:::
+
+## 参考リンク
+https://www.shift-the-oracle.com/sql/group-comparison-condition.html#group-comparison
+
+---
+<br><br>
+
+# 問題4-15：条件によって判定基準を変える（CASE式をWHERE句で使う）
+### 難易度：★★★☆☆ (Lv.3)
+
+## 問題
+次の`WITH`句で作成する **`EMPLOYEE_EVAL`**（従業員評価用データ）を使用します。
+
+```sql
+WITH employee_eval AS (
+    SELECT 1  AS employee_id, 'Tanaka'    AS last_name, 'SA_REP'   AS job_id, 9500  AS salary FROM dual UNION ALL
+    SELECT 2, 'Suzuki',    'SA_REP',   10500 FROM dual UNION ALL
+    SELECT 3, 'Sato',      'SA_MAN',   15000 FROM dual UNION ALL
+    SELECT 4, 'Ito',       'IT_PROG',  4800  FROM dual UNION ALL
+    SELECT 5, 'Watanabe',  'IT_PROG',  6000  FROM dual UNION ALL
+    SELECT 6, 'Yamamoto',  'ST_CLERK', 2800  FROM dual UNION ALL
+    SELECT 7, 'Nakamura',  'ST_CLERK', 3200  FROM dual UNION ALL
+    SELECT 8, 'Kobayashi', 'AD_ASST',  2900  FROM dual UNION ALL
+    SELECT 9, 'Kato',      'MK_REP',   3500  FROM dual UNION ALL
+    SELECT 10, 'Kimura',   'SA_MAN',   9800  FROM dual
+)
+SELECT * FROM employee_eval
+```
+
+このデータから、**「昇給推薦の対象となる従業員」** を抽出してください。ただし、給与の基準（ボーダーライン）は職種のカテゴリによって異なります。
+
+**【推薦基準（SALARYがこの金額以上）】**
+* `JOB_ID` が **'SA_'で始まる**（営業系）　→　**`10000`以上**
+* `JOB_ID` が **'IT_'で始まる**（技術系）　→　**`5000`以上**
+* **上記以外**（その他の職種）　→　**`3000`以上**
+
+なお、レコードは`EMPLOYEE_ID`の昇順で表示してください。
+
+## 期待する結果
+| EMPLOYEE_ID | LAST_NAME | JOB_ID   | SALARY | 
+| ----------- | --------- | -------- | ------ | 
+| 2           | Suzuki    | SA_REP   | 10500  | 
+| 3           | Sato      | SA_MAN   | 15000  | 
+| 5           | Watanabe  | IT_PROG  | 6000   | 
+| 7           | Nakamura  | ST_CLERK | 3200   | 
+| 9           | Kato      | MK_REP   | 3500   | 
+
+## 解答例
+```sql
+WITH employee_eval AS (
+    SELECT 1  AS employee_id, 'Tanaka'    AS last_name, 'SA_REP'   AS job_id, 9500  AS salary FROM dual UNION ALL
+    SELECT 2, 'Suzuki',    'SA_REP',   10500 FROM dual UNION ALL
+    SELECT 3, 'Sato',      'SA_MAN',   15000 FROM dual UNION ALL
+    SELECT 4, 'Ito',       'IT_PROG',  4800  FROM dual UNION ALL
+    SELECT 5, 'Watanabe',  'IT_PROG',  6000  FROM dual UNION ALL
+    SELECT 6, 'Yamamoto',  'ST_CLERK', 2800  FROM dual UNION ALL
+    SELECT 7, 'Nakamura',  'ST_CLERK', 3200  FROM dual UNION ALL
+    SELECT 8, 'Kobayashi', 'AD_ASST',  2900  FROM dual UNION ALL
+    SELECT 9, 'Kato',      'MK_REP',   3500  FROM dual UNION ALL
+    SELECT 10, 'Kimura',   'SA_MAN',   9800  FROM dual
+)
+SELECT
+    employee_id,
+    last_name,
+    job_id,
+    salary
+FROM
+    employee_eval
+WHERE
+    salary >= CASE
+        WHEN job_id LIKE 'SA_%' THEN 10000
+        WHEN job_id LIKE 'IT_%' THEN 5000
+        ELSE 3000
+    END
+ORDER BY
+    employee_id
+```
+
+## 解説
+問題4-8では、`CASE`式を **「SELECT句で新しい列（表示用のラベル）を作る」** という使い方で紹介しました。今回はその応用編として、**`CASE`式を`WHERE`句の中で、比較する「値そのもの」を動的に作り出すために使う**という使い方を扱います。
+
+今回の業務ルールは、「職種によって、昇給推薦のボーダーラインとなる給与額そのものが変わる」というものです。これは`salary >= 数値`という単純な比較の右側（判定基準値）を、行ごとに切り替える必要がある、という点がポイントです。
+
+```mermaid
+flowchart TD
+    A["各行の JOB_ID"] --> B{"'SA_'で始まる？"}
+    B -->|"Yes"| C["ボーダーライン：10000"]
+    B -->|"No"| D{"'IT_'で始まる？"}
+    D -->|"Yes"| E["ボーダーライン：5000"]
+    D -->|"No"| F["ボーダーライン：3000
+    （その他）"]
+    C --> G{"SALARY ≧
+    ボーダーライン？"}
+    E --> G
+    F --> G
+    G -->|"Yes"| H["結果に含まれる"]
+    G -->|"No"| I["除外"]
+```
+
+解答例の`CASE`式は、`SELECT`句ではなく`salary >=`の右側、つまり**比較演算子のオペランド（比較対象の値）の位置**に書かれています。
+
+```sql
+WHERE
+    salary >= CASE
+        WHEN job_id LIKE 'SA_%' THEN 10000
+        WHEN job_id LIKE 'IT_%' THEN 5000
+        ELSE 3000
+    END
+```
+
+`CASE`式は「値を返す式」であるという本質を思い出してください。`SELECT`句だけでなく、`WHERE`句・`ORDER BY`句・関数の引数など、「値を書ける場所」ならどこにでも埋め込むことができます。今回はその性質を利用し、「行ごとに異なる基準値」を`CASE`式でその場で計算し、それを`salary`と比較しています。
+
+### なぜAND/ORの組み合わせでは書きにくいのか
+
+同じ業務ルールを、問題4-12で扱った「カッコによるAND/OR」だけで表現しようとすると、次のように条件がかなり冗長になります。
+
+```sql:AND/ORの組み合わせで同じ結果を再現する場合
+SELECT
+    employee_id,
+    last_name,
+    job_id,
+    salary
+FROM
+    employee_eval
+WHERE
+       (job_id LIKE 'SA_%' AND salary >= 10000)
+    OR (job_id LIKE 'IT_%' AND salary >= 5000)
+    OR (job_id NOT LIKE 'SA_%' AND job_id NOT LIKE 'IT_%' AND salary >= 3000)
+ORDER BY
+    employee_id
+```
+
+動作としては解答例と全く同じ結果になりますが、`job_id`に関する条件（`LIKE 'SA_%'`など）を、カテゴリの数だけ**繰り返し書く**必要があります。特に3つ目の「その他」の条件では、「SA_でもIT_でもない」という否定条件をわざわざ書き下さなければならず、カテゴリが増えるたびにこの否定条件の羅列がどんどん長くなっていきます。
+
+| 書き方 | 職種条件の重複 | カテゴリ追加時の修正量 |
+| :--- | :--- | :--- |
+| `CASE`式でボーダーラインを算出 | なし（`job_id`の判定は1回だけ） | `WHEN`を1行追加するだけ |
+| `AND`/`OR`の組み合わせ | あり（カテゴリの数だけ`job_id`条件を書く） | 新しい`OR`ブロックを丸ごと追加 |
+
+`CASE`式を使う書き方では、「`job_id`から基準値を導く」というロジックと、「導いた基準値と`salary`を比較する」というロジックがきれいに分離されているため、カテゴリが4つ、5つと増えても`WHEN`句を追加するだけで対応できます。
+
+### Oracleでは「CASE式が直接TRUE/FALSEを返す」わけではない
+
+ここで注意したいのが、他のプログラミング言語の感覚で次のように書きたくなるケースです。
+
+```sql:❌ これは書けない（構文エラー）
+WHERE
+    CASE
+        WHEN job_id LIKE 'SA_%' THEN salary >= 10000
+        WHEN job_id LIKE 'IT_%' THEN salary >= 5000
+        ELSE salary >= 3000
+    END
+```
+
+Oracle SQLの`CASE`式は、あくまで **「値」を返す式** であり、TRUE/FALSEという真偽値そのものを`THEN`句の結果として直接使うことはできません（`salary >= 10000`という比較式自体を`THEN`の結果に置くことは、SQLの構文上サポートされていません）。そのため今回の解答例のように、`CASE`式には **「比較したい値（今回は基準となる給与額）」を返させ**、その結果を`WHERE`句の比較演算子で評価する、という組み立て方が基本になります。
+
+もし真偽値そのものを`CASE`式で扱いたい場合は、次のように「合格なら1、不合格なら0」といった値を返させ、それを`=`で比較する形に変換する必要があります。
+
+```sql:参考：真偽値を1/0に置き換えて判定する書き方
+WHERE
+    1 = CASE
+        WHEN job_id LIKE 'SA_%'  AND salary >= 10000 THEN 1
+        WHEN job_id LIKE 'IT_%'  AND salary >= 5000  THEN 1
+        WHEN job_id NOT LIKE 'SA_%' AND job_id NOT LIKE 'IT_%' AND salary >= 3000 THEN 1
+        ELSE 0
+    END
+```
+
+ただしこの書き方は、結局`AND`/`OR`版と同じように`job_id`の判定を繰り返す必要が出てきてしまうため、今回のような「基準値そのものを切り替えたい」ケースでは、解答例のように**CASE式に基準値を返させて比較演算子の相手にする**方が、圧倒的にシンプルで見通しの良いSQLになります。
+
+期待する結果を見ると、`Kimura`さん（SA_MAN、給与9800）は、営業系の基準である10000に届かないため除外されています。一方`Ito`さん（IT_PROG、給与4800）も、技術系の基準である5000に届かず除外されています。カテゴリごとに異なる基準値がきちんと適用されていることが確認できます。
+
+:::message
+### CASE式は「値が必要な場所」ならどこでも使える万能選手
+今回はWHERE句での活用でしたが、同じ考え方は`ORDER BY`句（並び替えの基準を条件によって変える）や、`GROUP BY`句（集計の単位を条件によってまとめる）でも応用できます。例えば「職種によって並び替えの優先順位を変えたい」場合、`ORDER BY CASE WHEN job_id LIKE 'SA_%' THEN 1 ELSE 2 END, salary DESC`のような書き方が可能です。「CASE式は値を返す式であり、値を置ける場所ならどこにでも埋め込める」という発想を持っておくと、複雑な業務ルールをSQL一本で表現できる場面がぐっと広がります。
+:::
+
+## 参考リンク
+https://www.shift-the-oracle.com/sql/case-when-expression.html
